@@ -1,0 +1,222 @@
+#Beta Diversity
+
+
+library(factoextra)
+library(ggforce)
+
+
+## PERMANOVA
+
+### Bray-Curtis
+
+#```{r}
+#Generate Vegan formatted data table
+sampledf <- data.frame(sample_data(physeq_obj.occ))
+
+carnivore_rel_abun<- vegan_otu(physeq_obj.occ)
+
+#Bray curtis dissimilarity matrix
+d_carn <- vegdist(carnivore_rel_abun, method="bray") 
+
+#Permanova
+sampledf$Season <- as.character(sampledf$Season)
+sampledf$Site <- as.character(sampledf$Site)
+
+colnames(carnivore_rel_abun)
+
+site_season_permanova <-adonis(carnivore_rel_abun~ sampledf$Site+ sampledf$Season)
+site_season_permanova$aov.tab
+
+site_permanova <-adonis(carnivore_rel_abun~ sampledf$Site)
+site_permanova$aov.tab
+
+season_permanova <- adonis(carnivore_rel_abun~ sampledf$Season)
+season_permanova$aov.tab
+
+
+
+#```
+### Jaccard
+
+#```{r}
+#Generate Vegan formatted data table
+sampledf_j <- data.frame(sample_data(physeq_obj.occ))
+carnivore_rel_abun_j<- vegan_otu(physeq_obj.occ)
+
+#Bray curtis dissimilarity matrix
+d_carn_j <- vegdist(carnivore_rel_abun_j, method="jaccard", binary=TRUE) 
+
+
+#```
+
+## Homogeneity of dispersions test
+
+#```{r}
+
+x <- betadisper(d_carn, getElement(sampledf, "Site"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledf, "Site"))))
+#```
+
+betadisper(d_carn, getElement(sampledf, "Season"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledf, "Season"))))
+
+#```{r}
+betadisper(d_carn_j, getElement(sampledf_j, "Site"))
+broom::tidy(TukeyHSD(betadisper(d_carn_j, getElement(sampledf_j, "Site"))))
+
+#``
+
+## NMDS Plots
+
+
+#```{r, results="hide",warning=FALSE}
+# NMDS ordination
+ord <- ordinate(physeq_obj.occ, method = "NMDS", distance = d_carn)
+ord
+nmdsplot <- plot_ordination(physeq_obj.occ, ord, color = "Site", shape="Season") +
+  geom_point(size=3) +
+  theme_bw()  + stat_ellipse(geom = "path", type="norm", aes(group=Site, color=Site),linetype = 3)  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=12),
+        axis.title=element_text(size=10,face="bold"),legend.title = element_text( size=10, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Season") +
+  ggtitle("") + theme(plot.title = element_text(hjust = 0.5))
+nmdsplot
+
+ggsave(filename = here("Plos_Seagrass","betanmds.eps"),
+       plot = nmdsplot,
+       device = cairo_ps,
+       dpi = 300,
+       width = 7.5,
+       height = 4.5,
+       units = c("in"))
+
+
+
+###Without CherryCove
+
+### Bray-Curtis
+
+#```{r}
+#Generate Vegan formatted data table
+sampledseagrass <- data.frame(sample_data(physeq_obj.occ_seagrasssite))
+carnivore_rel_abun<- vegan_otu(physeq_obj.occ_seagrasssite)
+
+#Bray curtis dissimilarity matrix
+d_carn <- vegdist(carnivore_rel_abun, method="bray") 
+
+#Permanova
+sampledseagrass$Season <- as.character(sampledseagrass$Season)
+sampledseagrass$Site <- as.character(sampledseagrass$Site)
+
+colnames(carnivore_rel_abun)
+
+adonis(carnivore_rel_abun~ sampledseagrass$Site+ sampledseagrass$Season)
+adonis(carnivore_rel_abun~ sampledseagrass$Site)
+adonis(carnivore_rel_abun~ sampledseagrass$Season)
+
+## Homogeneity of dispersions test
+
+#```{r}
+
+betadisper(d_carn, getElement(sampledseagrass, "Site"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledseagrass, "Site"))))
+#```
+
+betadisper(d_carn, getElement(sampledseagrass, "Season"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledseagrass, "Season"))))
+
+
+#``
+
+## NMDS Plots
+
+
+#```{r, results="hide",warning=FALSE}
+# NMDS ordination
+ord <- ordinate(physeq_obj.occ_seagrasssite, method = "NMDS", distance = d_carn)
+ord
+nmdsplot <- plot_ordination(physeq_obj.occ_seagrasssite, ord, color = "Site", shape="Season") +
+  geom_point(size=3) +
+  theme_bw()  + stat_ellipse(geom = "path", type="norm", aes(group=Site, color=Site),linetype = 2)  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=12),
+        axis.title=element_text(size=10,face="bold"),legend.title = element_text( size=10, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Season") +
+  ggtitle("") + theme(plot.title = element_text(hjust = 0.5))
+
+nmdsplot
+
+ggsave(filename = here("Desktop", "NMDS_withoutCherry_newcolors.eps"),
+       plot = plot(nmdsplot),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+########3
+
+#Generate Vegan formatted data table
+sampledf <- data.frame(sample_data(geiger))
+carnivore_rel_abun<- vegan_otu(geiger)
+
+#Bray curtis dissimilarity matrix
+d_carn <- vegdist(carnivore_rel_abun, method="bray") 
+
+#Permanova
+sampledf$Season <- as.character(sampledf$Season)
+sampledf$Site <- as.character(sampledf$Site)
+
+colnames(carnivore_rel_abun)
+
+adonis(carnivore_rel_abun~ sampledf$Site+ sampledf$Season)
+adonis(carnivore_rel_abun~ sampledf$Season)
+
+ord <- ordinate(geiger, method = "NMDS", distance = d_carn)
+ord
+nmdsplot <- plot_ordination(geiger, ord, color="Season", shape="Season") +
+  geom_point(size=2) +
+  theme_bw()  + geom_mark_ellipse(geom = "path", type="norm", aes(group=Season, color=Season),linetype = 2)  + scale_color_manual(values=col.great)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=8),
+        axis.title=element_text(size=10,face="bold"),legend.title = element_text( size=6, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Season")
+
+
+
+
+
+nmdsplot
+#```
+## Figure 4
+#```{r}
+ggsave(filename = here("Desktop", "NMDS_withCherry.eps"),
+       plot = plot(nmdsplot),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
+
+broom::tidy(adonis(carnivore_rel_abun~ sampledf$Site+ sampledf$Season, method="jaccard", binary=TRUE)$aov.tab)
+
+#```{r, results="hide",warning=FALSE}
+# NMDS ordination
+ord_j <- ordinate(physeq_obj.occ, method = "NMDS", distance = d_carn_j)
+ord_j
+
+sample_data(physeq_obj.occ)
+
+nmdsplot_j <- plot_ordination(physeq_obj.occ, ord_j, color = "Site", shape="Season") +
+  geom_point(size=2) +
+  theme_bw()  + stat_ellipse(geom = "path", type="norm", aes(group=Site, color=Site),linetype = 2)  + scale_color_manual(values=c(values=col.great))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=16),
+        axis.title=element_text(size=20,face="bold"),legend.title = element_text( size=12, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Site")
+
+nmdsplot_j
+#```
+## Figure S2
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig_S2.eps"),
+       plot = plot(nmdsplot_j),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
