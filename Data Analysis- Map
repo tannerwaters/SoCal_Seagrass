@@ -1,0 +1,75 @@
+##Make a map using OpenStreetMap which is OpenStreetMap map tiles are free to use as long as they are accompanied by the following attribution statement: 
+##“Base map and data from OpenStreetMap and OpenStreetMap Foundation”.
+##Maps created using OpenStreetMap data must be accompanied by the following attribution statement: "Contains information from OpenStreetMap and OpenStreetMap Foundation, which is made available under the Open Database License.”
+
+library(tidyverse)
+library(ggrepel)
+library(ggmap)
+library(osmdata)
+library(ggplot2)
+library(here)
+library(ggpubr)
+library(Cairo)
+
+ opencoast <- read.csv(file=here("opencoast.csv"))
+ island <- read.csv(file=here("island.csv"))
+ embayment <- read.csv(file=here("embayment.csv"))
+ cherry <- read.csv(file=here("cherry.csv"))
+#cherry <- read.csv(file=here("Documents", "cherry.csv"))
+
+myLocation <- "Seagrass"
+myLocation<- c(-118.9, 33.2, -117.8, 34.2)
+
+myMapseagrass <- get_map(location=myLocation, source="stamen", maptype = "terrain", zoom=10,crop=FALSE)
+ggmap(myMapseagrass)
+
+myMapseagrass <- ggmap(myMapseagrass) + geom_point(data = island, aes(x= Longitude, y = Latitude), color ='darkgreen', shape = 17, size = 1.5) + geom_label_repel(data = island, aes(x= Longitude, y = Latitude, label= Location), size = 2,box.padding = 2, point.padding = 0.5)  + geom_point(data = cherry, aes(x= Longitude, y = Latitude), color ='red', shape = 17, size = 1.5) + geom_label_repel(data = cherry, aes(x= Longitude, y = Latitude, label= Location), size =2,box.padding = 2, point.padding = 0.5)  + geom_point(data = opencoast, aes(x= Longitude, y = Latitude), color ='yellow', shape = 17, size = 1.5) + geom_label_repel(data = opencoast, aes(x= Longitude, y = Latitude, label= Location), size = 2,box.padding = 2, point.padding = 0.5)  + geom_point(data = embayment, aes(x= Longitude, y = Latitude), color ='darkgreen', shape = 17, size =1.5)  + geom_label_repel(data = embayment, aes(x= Longitude, y = Latitude, label= Location), size =2,box.padding = 2, point.padding = 0.5) +labs(y= "Latitude", x = "Longitude")
+myMapseagrass
+
+##Zoomed in Map of Amarillo
+myLocation <- "Amarillo"
+myLocation<- c(-118.85, 33.9, -118.6, 34.1)
+
+myMapAmarillo <- get_map(location=myLocation, source="stamen", maptype = "terrain", zoom=12,crop=FALSE)
+
+myMapAmarillo <- ggmap(myMapAmarillo) + geom_point(data = opencoast, aes(x= Longitude, y = Latitude), color ='yellow', shape = 17, size = 3)+ geom_label_repel(data = opencoast, aes(x= Longitude, y = Latitude, label= Location), size = 2.5,box.padding = 2, point.padding = 0.5)
+myMapAmarillo <- myMapAmarillo +labs(y= "Latitude", x = "Longitude")
+myMapAmarillo
+
+##Zoomed in Map of Newport
+myLocation <- "Newport"
+myLocation<- c(-117.925, 33.6, -117.88, 33.64)
+
+myMapNewport <- get_map(location=myLocation, source="stamen", maptype = "terrain", zoom=15,crop=FALSE)
+ggmap(myMapNewport)
+
+
+myMapNewport <- ggmap(myMapNewport) + geom_point(data = embayment, aes(x= Longitude, y = Latitude), color ='darkgreen', shape = 17, size = 2) + geom_label_repel(data = embayment, aes(x= Longitude, y = Latitude, label= Location), size = 2 ,box.padding = 2, point.padding = 0.5)
+myMapNewport <- myMapNewport + xlab("Longitude") + ylab("Latitude")
+myMapNewport
+
+
+##Zoomed in Map of Catalina
+myLocation <- "Catalina"
+myLocation<- c(-118.45, 33.39, -118.6, 33.5)
+
+myMapCatalina <- get_map(location=myLocation, source="stamen", maptype = "terrain", zoom=13,crop=FALSE)
+
+myMapCatalina <- ggmap(myMapCatalina) + geom_point(data = island, aes(x= Longitude, y = Latitude), color ='darkgreen', shape = 17, size = 2) + geom_label_repel(data = island, aes(x= Longitude, y = Latitude, label= Location), size = 2.5,box.padding = 2, point.padding = 0.5) 
+myMapCatalina <- myMapCatalina + geom_point(data = cherry, aes(x= Longitude, y = Latitude), color ='red', shape = 17, size = 2)+ geom_label_repel(data = cherry, aes(x= Longitude, y = Latitude, label= Location), size = 2.5,box.padding = 2, point.padding = 0.5)
+myMapCatalina<- myMapCatalina +labs(y= "Latitude", x = "Longitude")
+myMapCatalina
+
+
+figure <- ggarrange(myMapAmarillo, myMapCatalina,myMapNewport,myMapseagrass,
+                    labels = c("A", "B","C", "D"),
+                    ncol = 2, nrow = 2)
+figure
+
+ggsave(filename = here("Plos_Seagrass","OSM.eps"),
+       plot = figure,
+       device = cairo_ps,
+       dpi = 300,
+       width = 7.5,
+       height = 7.5,
+       units = c("in"))
