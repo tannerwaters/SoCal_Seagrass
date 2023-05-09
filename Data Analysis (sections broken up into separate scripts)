@@ -1,0 +1,1814 @@
+# ---
+# title: "Scorpion Analyses"
+# author: "Zack Gold"
+# date: "11/10/2020"
+# output: html_document
+# ---
+
+#Library Loading
+
+library(dplyr)
+library(phyloseq)
+library(wesanderson)
+library(tidyverse)
+library(vegan)
+library(iNEXT)
+library(Cairo)
+library(multcomp)
+library(multcompView)
+library(treemapify)
+library(brew)
+library(RColorBrewer)
+library(car)
+library(VennDiagram)
+library(here)
+library(MASS) 
+library(scales) 
+library(gridExtra)
+library(segmented)
+library(knitr)
+library(ranacapa)
+library(ggrepel)
+library(gridExtra)
+library(svglite)
+library(melt)
+library(reshape2)
+
+#Load Data
+
+#Import Data
+here()
+post_occ_index <- readRDS(file=here("Anacapa","decontam","Output_R","post_occupancy_results_sum.taxonomy_tech_reps_summed_eDNA_index.RDS"))
+
+colnames(post_occ_index) %>% str_replace_all(., "-",".") -> post_occ_index_names
+colnames(post_occ_index) <-post_occ_index_names
+
+post_occ_counts <- readRDS(file=here("Anacapa","decontam","Output_R","post_occupancy_results_sum.taxonomy_tech_reps_summed_read_counts.RDS"))
+
+colnames(post_occ_counts) %>% str_replace_all(., "-",".") ->post_occ_counts_names
+colnames(post_occ_counts) <-post_occ_counts_names
+
+pre_index <- readRDS(file=here("Anacapa","decontam","Output_R","pre_occupancy_results_sum.taxonomy_tech_reps_summed_eDNA_index.RDS"))
+
+colnames(pre_index) %>% str_replace_all(., "-",".") -> pre_index_names
+colnames(pre_index) <-pre_index_names
+
+pre_counts <- readRDS(file=here("Anacapa","decontam","Output_R","pre_occupancy_results_sum.taxonomy_tech_reps_summed_read_counts.RDS"))
+
+colnames(pre_counts) %>% str_replace_all(., "-",".") -> pre_counts_names
+colnames(pre_counts) <-pre_counts_names
+
+ASV.nested.mpa <- readRDS(file=here("Anacapa","decontam","ASV.nested_final.RDS"))
+
+#Metadata
+input_meta_path <- here("Anacapa", "decontam", "metadata_seagrass_120621_updated.txt")
+
+metadata <- read.table(here(input_meta_path), header = 1, sep = "\t", stringsAsFactors = F)
+
+metadata %>% 
+  dplyr::select(-Seq_number) %>% 
+  rename(Seq_number=New_name) %>% 
+  mutate(., Seq_number= str_replace_all(Seq_number, "-","."))-> metadata
+
+#Create list of Tanner
+metadata %>% 
+  filter(Sample=="Tanner") %>% 
+  dplyr::select(Seq_number) -> Tanner_samples
+Tanner_samples <-  Tanner_samples$Seq_number
+
+
+#Ranacapa Code
+
+#{r anacapa to phyloseq functions from ranacapa library imported manually since they do not work on R3.6.0,  results="hide", warning=FALSE, include=FALSE}
+#' Takes a site-abundance table from Anacapa, and summarizes to each unique taxon in the sum.taxonomy column
+#' @param taxon_table OTU table from Anacapa
+#' @author Gaurav Kandlikar
+#' @examples
+#' good_taxon_table <- data.frame(sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' group_anacapa_by_taxonomy(good_taxon_table)
+#' @export
+group_anacapa_by_taxonomy <- function(taxon_table) {
+  # If tables were made in New Anacapa (with Domain), get rid of domain...
+  if(stringr::str_count(taxon_table$sum.taxonomy, ";")[1] == 7) {
+    taxon_table$sum.taxonomy = gsub(pattern = "^.*?;", replacement = "", x = taxon_table$sum.taxonomy)
+  }
+  taxon_table %>%
+    dplyr::filter(sum.taxonomy != "") %>%
+    dplyr::group_by(sum.taxonomy) %>%
+    dplyr::summarize_if(is.numeric, sum) %>%
+    dplyr::mutate(sum.taxonomy = as.character(sum.taxonomy)) %>%
+    data.frame
+}
+
+
+#' Takes an site-abundance table from Anacapa, along with a qiime-style mapping file, and returns a phyloseq object
+#' @param taxon_table Taxon table in the anacapa format
+#' @param metadata_file Metadata file with rows as sites, columns as variables
+#' @return phyloseq class object
+#' @author Gaurav Kandlikar
+#' @examples
+#' good_taxon_table <- data.frame(sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' good_maps <- data.frame(site = c("site_1", "site_2"), season = c("wet", "dry"),
+#'  host = c("oak", "sage"))
+#' convert_anacapa_to_phyloseq(good_taxon_table, good_maps)
+#' @export
+
+convert_anacapa_to_phyloseq <- function(taxon_table, metadata_file) {
+  
+  # Validate the files
+  validate_input_files(taxon_table, metadata_file)
+  
+  # Group the anacapa ouptut by taxonomy, if it has not yet happened, and turn it into a matrix
+  taxon_table2 <- group_anacapa_by_taxonomy(taxon_table) %>%
+    tibble::column_to_rownames("sum.taxonomy") %>%
+    as.matrix
+  # Reorder the columns (sites) for ease of displaying later
+  taxon_table2 <- taxon_table2[ , order(colnames(taxon_table2))]
+  
+  # Convert the matrix into a phyloseq otu_table object, with taxa as the rows
+  ana_taxon_table_physeq <- phyloseq::otu_table(taxon_table2, taxa_are_rows = TRUE)
+  
+  # Extract the rownames of the matrix above- this has the full taxonomic path.
+  # Split the taxonomic path on semicolons, and turn the resulting matrix into
+  # a phyloseq tax_table object
+  taxon_names <- reshape2::colsplit(rownames(taxon_table2), ";",
+                                    names = c("Domain","Phylum","Class","Order","Family","Genus","Species")) %>%
+    as.matrix
+  rownames(taxon_names) <- rownames(taxon_table2)
+  
+  tax_physeq <- phyloseq::tax_table(taxon_names)
+  colnames(tax_physeq) <- c("Domain","Phylum","Class","Order","Family","Genus","Species")
+  
+  # Make a phyloseq object out of the otu_table and the tax_table objects
+  physeq_object <- phyloseq::phyloseq(ana_taxon_table_physeq, tax_physeq)
+  
+  # Make sure the mapping file (ie the site metadata) is ordered according to site name
+  rownames(metadata_file) <- metadata_file[, 1]
+  metadata_file <- metadata_file[order(metadata_file[, 1]), ]
+  
+  # Convert the mapping file into a phyloseq sample_data object, and merge it with the
+  # phyloseq object created above to make a phyloseq object with otu table, tax table, and sample data.
+  sampledata <- phyloseq::sample_data(metadata_file)
+  phyloseq::merge_phyloseq(physeq_object, sampledata)
+}
+
+#' Takes a phyloseq object with an otu_table object and returns a vegan style community matrix.
+#' @param physeq_object phyloseq object with an otu_table object within
+#' @return vegan-style community matrix
+#' @examples
+#' good_taxon_table <- data.frame(sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' good_maps <- data.frame(site = c("site_1", "site_2"), season = c("wet", "dry"),
+#' host = c("oak", "sage"))
+#' physeq_object <- convert_anacapa_to_phyloseq(good_taxon_table, good_maps)
+#' vegan_otu(physeq_object)
+#' @export
+vegan_otu <- function(physeq_object) {
+  OTU <- phyloseq::otu_table(physeq_object)
+  if (phyloseq::taxa_are_rows(OTU)) {
+    OTU <- t(OTU)
+  }
+  return(methods::as(OTU, "matrix"))
+}
+
+#' Remove "xxx_seq_number" column from ana_taxon_table file if it exists
+#' takes one taxon table as its input, and if it include
+#' a column named "xxx_seq_number", it gets rid of that column - it's not of use to us
+#' any longer
+#'
+#' @param taxon_table taxonomy table from Anacapa
+#' @return ana_taxon_table file, with "xxx_seq_number" column removed (if it existed)
+#' @examples
+#' good_taxon_table <- data.frame(seq_number = c(1,2),
+#' sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' scrub_seqNum_column(good_taxon_table)
+#' @export
+scrub_seqNum_column <- function(taxon_table) {
+  to_return <- taxon_table %>% dplyr::select(-dplyr::matches("seq_number"))
+  return(to_return)
+}
+
+#' Replace empty calls in Anacapa taxonomy tables with Unknown
+#' (that is what they effectively are to most users)
+#' @param taxon_table taxonomy table from Anacapa
+#' @return ana_taxon_table with scrubbed 'sum.taxonomy' column
+#' @examples
+#' good_taxon_table <- data.frame(sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' scrub_taxon_paths(good_taxon_table)
+#' @export
+scrub_taxon_paths <- function(taxon_table) {
+  to_return <- taxon_table
+  new_sum_tax <- reshape2::colsplit(taxon_table$sum.taxonomy, ";",
+                                    names = c("Domain","Phylum", "Class", "Order", "Family", "Genus", "Species"))
+  
+  new_sum_tax <- new_sum_tax %>%
+    dplyr::mutate(Domain = ifelse(is.na(Domain) | Domain == "", "unknown", Domain)) %>%
+    dplyr::mutate(Phylum = ifelse(is.na(Phylum) | Phylum == "", "unknown", Phylum)) %>%
+    dplyr::mutate(Class = ifelse(is.na(Class) | Class == "", "unknown", Class)) %>%
+    dplyr::mutate(Order = ifelse(is.na(Order) | Order == "", "unknown", Order)) %>%
+    dplyr::mutate(Family = ifelse(is.na(Family) | Family == "", "unknown", Family)) %>%
+    dplyr::mutate(Genus = ifelse(is.na(Genus) | Genus == "", "unknown", Genus)) %>%
+    dplyr::mutate(Species = ifelse(is.na(Species)| Species == "", "unknown", Species))
+  
+  new_sum_tax2 <- paste(new_sum_tax$Domain,
+                        new_sum_tax$Phylum,
+                        new_sum_tax$Class,
+                        new_sum_tax$Order,
+                        new_sum_tax$Family,
+                        new_sum_tax$Genus,
+                        new_sum_tax$Species, sep = ";")
+  to_return$sum.taxonomy <- new_sum_tax2
+  return(to_return)
+}
+
+#' Verify that the input taxon_table file and the input mapping file meets specificationss
+#' The function takes one taxon table as its input, and verfies that it meets
+#' the expected standards.
+#' The standards incude:
+#' 1. Column names exist.
+#' 2. One of the columns is named "sum.taxonomy"
+#' 3. The "xxx_seq_number" column, if it ever existed, is removed
+#' 4. All columns apart from sum.taxonomy should be numeric
+#' 5. All columns apart from sum.taxonomy should have corresponding row in metadata file
+#' @param taxon_table taxonomy table from Anacapa
+#' @param metadata_file Qiime-style mapping
+#' @examples
+#' good_taxon_table <- data.frame(sum.taxonomy = c("a;b;c;d;f;u", "p;q;r;s;t;u"),
+#' site_1 = c(0,1), site_2 = c(10, 20))
+#' good_maps <- data.frame(site = c("site_1", "site_2"),
+#' season = c("wet", "dry"), host = c("oak", "sage"))
+#' validate_input_files(good_taxon_table, good_maps)
+#' @export
+validate_input_files <- function(taxon_table, metadata_file) {
+  
+  # 1. Column names exist.
+  if (is.null(colnames(taxon_table))) {
+    stop("The input taxon table should have column names. The taxonomy column should be named 'sum.taxonomy'; the rest of the columns should be named according to their sample names.")
+  }
+  
+  # 2. One of the columns is named "sum.taxonomy"
+  if (!("sum.taxonomy" %in% colnames(taxon_table))) {
+    stop("Please make sure that the taxonomy column in the input taxon table is named 'sum.taxonomy'!")
+  }
+  
+  # 3. The "xxx_seq_number" column, if it ever existed, is removed
+  if (any(stringr::str_detect(colnames(taxon_table), "seq_number"))) {
+    stop("Please makes sure that you have removed the 'xxx_seq_number' column from the taxon table (note: this can be done with the function `scrub_seqNum_column`)")
+  }
+  
+  # 4. All columns apart from sum.taxonomy should be numeric
+  if (!(all(sapply(taxon_table %>% dplyr::select(-sum.taxonomy), is.numeric)))) {
+    stop("Please make sure that all columns apart from sum.taxonomy only contain numeric data!")
+  }
+  
+   #5. All columns apart from sum.taxonomy should have corresponding row in metadata file
+  #if (!(all(colnames(taxon_table %>% dplyr::select(-sum.taxonomy)) %in% metadata_file[, 1]))) {
+   # stop("Please make sure that each sample in your taxon table has a corresponding row in the mapping file!")
+  }
+
+#}
+
+
+#Fixing the species
+
+#post_occ_counts$sum.taxonomy[41] <- "Eukaryota;Chordata;Actinopteri;;Embiotocidae;;"
+post_occ_counts$sum.taxonomy[65] <- "Eukaryota;Chordata;Actinopteri;;Embiotocidae;Amphistichus/Hyperprosopon;Amphistichus sp./Hyperprosopon sp."
+post_occ_counts$sum.taxonomy[59] <- "Eukaryota;Chordata;Actinopteri;;Embiotocidae;Phanerodon;Phanerodon furcatus"
+post_occ_counts$sum.taxonomy[96] <- "Eukaryota;Chordata;Actinopteri;Pleuronectiformes;Paralichthyidae;Citharichthys;Citharichthys sordidus/xanthostigma"
+post_occ_counts$sum.taxonomy[56] <- "Eukaryota;Chordata;Actinopteri;;Sciaenidae;Genyonemus/Seriphus;Genyonemus lineatus/Seriphus politus"
+post_occ_counts$sum.taxonomy[62] <- "Eukaryota;Chordata;Actinopteri;Perciformes;Sebastidae;Sebastes;Sebastes sp."
+post_occ_counts$sum.taxonomy[74] <- "Eukaryota;Chordata;Actinopteri;Scombriformes;Scombridae;Thunnus;Thunnus sp."
+post_occ_counts$sum.taxonomy[36] <- "Eukaryota;Chordata;Actinopteri;Beloniformes;Exocoetidae;Cheilopogon;Cheilopogon sp."
+post_occ_counts$sum.taxonomy[50] <- "Eukaryota;Chordata;Actinopteri;Blenniiformes;Clinidae;Gibbonsia;Gibbonsia elegans/montereyensis/metzi"
+post_occ_counts$sum.taxonomy[3] <- "Eukaryota;Chordata;Actinopteri;Perciformes;Serranidae;Paralabrax;Paralabrax clathratus"
+post_occ_counts$sum.taxonomy[14]<-  "Eukaryota;Chordata;Actinopteri;Centrarchiformes;Kyphosidae;Girella;Girella nigricans" 
+post_occ_counts$sum.taxonomy[10]<-  "Eukaryota;Chordata;Actinopteri;Scombriformes;Scombridae;Scomber;Scomber japonicus"
+
+
+post_occ_index$sum.taxonomy[65] <- "Eukaryota;Chordata;Actinopteri;;Embiotocidae;Amphistichus/Hyperprosopon;Amphistichus sp./Hyperprosopon sp."
+post_occ_index$sum.taxonomy[59] <- "Eukaryota;Chordata;Actinopteri;;Embiotocidae;Phanerodon;Phanerodon furcatus"
+post_occ_index$sum.taxonomy[96] <- "Eukaryota;Chordata;Actinopteri;Pleuronectiformes;Paralichthyidae;Citharichthys;Citharichthys sordidus/xanthostigma"
+post_occ_index$sum.taxonomy[56] <- "Eukaryota;Chordata;Actinopteri;;Sciaenidae;Genyonemus/Seriphus;Genyonemus lineatus/Seriphus politus"
+post_occ_index$sum.taxonomy[62] <- "Eukaryota;Chordata;Actinopteri;Perciformes;Sebastidae;Sebastes;Sebastes sp."
+post_occ_index$sum.taxonomy[74] <- "Eukaryota;Chordata;Actinopteri;Scombriformes;Scombridae;Thunnus;Thunnus sp."
+post_occ_index$sum.taxonomy[36] <- "Eukaryota;Chordata;Actinopteri;Beloniformes;Exocoetidae;Cheilopogon;Cheilopogon sp."
+post_occ_index$sum.taxonomy[50] <- "Eukaryota;Chordata;Actinopteri;Blenniiformes;Clinidae;Gibbonsia;Gibbonsia elegans/montereyensis/metzi"
+post_occ_index$sum.taxonomy[3] <- "Eukaryota;Chordata;Actinopteri;Perciformes;Serranidae;Paralabrax;Paralabrax clathratus"
+post_occ_index$sum.taxonomy[14] <- "Eukaryota;Chordata;Actinopteri;Centrarchiformes;Kyphosidae;Girella;Girella nigricans"
+post_occ_index$sum.taxonomy[10] <- "Eukaryota;Chordata;Actinopteri;Scombriformes;Scombridae;Scomber;Scomber japonicus"
+
+
+#post_occ_index
+
+
+
+
+
+
+
+
+
+#Create phyloseq objects
+
+
+#Post Occ
+##eDNA Index
+physeq_obj.occ <- convert_anacapa_to_phyloseq(post_occ_index, metadata)
+#Reads
+physeq_obj.occ_reads <- convert_anacapa_to_phyloseq(post_occ_counts, metadata)
+
+#write.csv(post_occ_counts,"~/itdoesnotmattertoni.csv",quote=FALSE,row.names=FALSE)
+#write.csv(post_occ_index,"~/itdoesnotmattertonindex.csv",quote=FALSE,row.names=FALSE)
+
+#eDNA Index Pre Occ
+physeq_obj.pre <- convert_anacapa_to_phyloseq(pre_index, metadata)
+
+#eDNA Index Post OCC
+physeq_obj.pre_reads <- convert_anacapa_to_phyloseq(pre_counts, metadata)
+
+
+#Remove Additional Contaminant Species and Clean up Data
+
+
+#removed Lab Contaminant ASVs
+# badTaxa = c("","Unassigned",
+#             "NA",
+#             "Eukaryota;Chordata;;NA;;;",
+#             "Eukaryota;Chordata;Actinopteri;Salmoniformes;Salmonidae;Salmo;Salmo salar",
+#             "Eukaryota;Chordata;Mammalia;Primates;Hominidae;Homo;Homo sapiens",
+#             "Eukaryota;Chordata;Mammalia;Artiodactyla;Bovidae;Bos;Bos taurus",
+#             "Eukaryota;Chordata;Actinopteri;Salmoniformes;Salmonidae;Salmo;",
+#             "Eukaryota;Chordata;Actinopteri;Cypriniformes;Cyprinidae;Ctenopharyngodon;Ctenopharyngodon idella",
+#             "Eukaryota;Chordata;Actinopteri;Salmoniformes;Salmonidae;Oncorhynchus;", 
+#             "Eukaryota;Chordata;Actinopteri;Salmoniformes;Salmonidae;Oncorhynchus;Oncorhynchus tshawytscha")
+#             #"Eukaryota;Chordata;Mammalia;Carnivora;Canidae;; lupus",
+#             #"Eukaryota;Chordata;Mammalia;Carnivora;Felidae;Felis;Felis catus")
+# 
+# goodTaxa_1 <- setdiff(taxa_names(physeq_obj.occ), badTaxa)
+# goodTaxa_2 <- setdiff(taxa_names(physeq_obj.occ_reads), badTaxa)
+# goodTaxa_3 <- setdiff(taxa_names(physeq_obj.pre), badTaxa)
+# goodTaxa_4 <- setdiff(taxa_names(physeq_obj.pre_reads), badTaxa)
+# 
+# 
+# physeq_obj.occ <- prune_taxa(goodTaxa_1, physeq_obj.occ)
+# physeq_obj.occ_reads <- prune_taxa(goodTaxa_2, physeq_obj.occ_reads)
+# 
+# physeq_obj.pre <- prune_taxa(goodTaxa_3, physeq_obj.pre)
+# physeq_obj.pre_reads <- prune_taxa(goodTaxa_4, physeq_obj.pre_reads)
+
+physeq_obj.occ <- subset_samples(physeq_obj.occ, Sample =="Tanner")
+physeq_obj.occ_reads <- subset_samples(physeq_obj.occ_reads, Sample =="Tanner")
+
+physeq_obj.occ <- subset_taxa(physeq_obj.occ, Class != "Mammalia")
+physeq_obj.occ_reads <- subset_taxa(physeq_obj.occ_reads, Class != "Mammalia")
+
+physeq_obj.occ <- subset_taxa(physeq_obj.occ, Class != "Aves")
+physeq_obj.occ_reads <- subset_taxa(physeq_obj.occ_reads, Class != "Aves")
+
+physeq_obj.occ <- subset_taxa(physeq_obj.occ, Species != "")
+physeq_obj.occ_reads <- subset_taxa(physeq_obj.occ_reads, Species != "")
+
+physeq_obj.pre <- subset_samples(physeq_obj.pre, Sample =="Tanner")
+physeq_obj.pre_reads <- subset_samples(physeq_obj.pre_reads, Sample =="Tanner")
+
+physeq_obj.pre <- subset_taxa(physeq_obj.pre, Class != "Mammalia")
+physeq_obj.pre_reads <- subset_taxa(physeq_obj.pre_reads, Class != "Mammalia")
+
+#physeq_obj.pre <- subset_taxa(physeq_obj.pre, Species != "")
+#physeq_obj.pre_reads <- subset_taxa(physeq_obj.pre_reads, Species != "")
+
+physeq_obj.pre <- subset_taxa(physeq_obj.pre, Class != "Aves")
+physeq_obj.pre_reads <- subset_taxa(physeq_obj.pre_reads, Class != "Aves")
+
+physeq_obj.pre <- subset_samples(physeq_obj.pre, Grass == "Seagrass")
+physeq_obj.pre_reads <- subset_samples(physeq_obj.pre_reads, Grass == "Seagrass")
+
+physeq_obj.occ <- subset_samples(physeq_obj.occ,  Grass == "Seagrass")
+physeq_obj.occ_reads <- subset_samples(physeq_obj.occ_reads, Grass == "Seagrass")
+
+physeq_obj.occ = filter_taxa(physeq_obj.occ, function(x) mean(x) > 0, TRUE)
+physeq_obj.occ_reads = filter_taxa(physeq_obj.occ_reads, function(x) mean(x) > 0, TRUE)
+
+physeq_obj.pre = filter_taxa(physeq_obj.pre, function(x) mean(x) > 0, TRUE)
+physeq_obj.pre_reads = filter_taxa(physeq_obj.pre_reads, function(x) mean(x) > 0, TRUE)
+
+physeq_obj.occ_seagrasssite <- subset_samples(physeq_obj.occ,  Site != "Cherry Cove")
+physeq_obj.occ_seagrasssite_reads <- subset_samples(physeq_obj.occ_reads,  Site != "Cherry Cove")
+
+physeq_obj.occ_seagrasssite = filter_taxa(physeq_obj.occ_seagrasssite, function(x) mean(x) > 0, TRUE)
+physeq_obj.occ_seagrasssite_reads = filter_taxa(physeq_obj.occ_seagrasssite_reads, function(x) mean(x) > 0, TRUE)
+
+write.csv(physeq_obj.occ_seagrasssite_reads@otu_table, "/Users/tannerwaters/Desktop/seagrassotutablereads.csv", row.names=FALSE)
+write.csv(physeq_obj.occ_seagrasssite_reads@tax_table, "/Users/tannerwaters/Desktop/seagrassotutaxtablereads.csv", row.names=FALSE)
+
+#General Run Stats
+
+##Post Occupancy
+
+### Unique ASVs
+
+
+ASV.nested.mpa %>% 
+  dplyr::select(Step4.tibble) %>% 
+  unnest(Step4.tibble) %>% 
+  filter(., !sample %in% Tanner_samples) %>%
+  filter(., nReads >0) %>%  dplyr::select(seq_number) %>% unique() %>% dim() -> unique_ASVs
+
+unique_ASVs[[1]]
+
+
+### Total Reads
+
+
+sample_sums(physeq_obj.occ_reads) %>% 
+  as.data.frame() %>% summarise(., total_reads=sum(.))
+
+
+### Table of Species
+
+
+get_taxa_unique(physeq_obj.occ_reads,"Species") %>% as.data.frame %>% rename(., Species=.) %>% arrange(Species) %>%  kable()
+
+tableofspecies <- get_taxa_unique(physeq_obj.occ_reads,"Species") %>% as.data.frame %>% rename(., Species=.) %>% arrange(Species) 
+#write.csv(tableofspecies, "/Users/tannerwaters/Desktop", row.names=FALSE)
+
+
+
+#Summary Count of Taxonomic Ranks Observed
+
+## All Sites
+
+
+Phylum <- length(get_taxa_unique(physeq_obj.occ_reads, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(physeq_obj.occ_reads, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(physeq_obj.occ_reads, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(physeq_obj.occ_reads, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(physeq_obj.occ_reads, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(physeq_obj.occ_reads, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+
+#All seagrass sites
+Phylum <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Order")) -1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(physeq_obj.occ_seagrasssite_reads, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+
+#Amarillo Site Only
+subset_samples(physeq_obj.occ_reads, Site=="Amarillo") -> phy_amarilllo
+subset_sample(phy_amarilllo,Season=="Summer") ->amarillo_summer
+phy_amarilllo = filter_taxa(phy_amarilllo, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_amarilllo, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_amarilllo, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_amarilllo, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_amarilllo, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_amarilllo, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_amarilllo, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+#Big Geiger Site Only
+subset_samples(physeq_obj.occ_reads, Site=="Big Geiger Cove") -> phy_big_geiger
+
+phy_big_geiger = filter_taxa(phy_big_geiger, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_big_geiger, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_big_geiger, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_big_geiger, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_big_geiger, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_big_geiger, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_big_geiger, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+
+#cherry cove
+subset_samples(physeq_obj.occ_reads, Site=="Cherry Cove") -> phy_cherry_cove
+phy_cherry_cove = filter_taxa(phy_cherry_cove, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_cherry_cove, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_cherry_cove, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_cherry_cove, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_cherry_cove, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_cherry_cove, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_cherry_cove, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+# #dockweiler Site Only
+# subset_samples(physeq_obj.occ_reads, Site=="Dockweiler") -> phy_dockweiler
+# phy_dockweiler = filter_taxa(phy_dockweiler, function(x) mean(x) > 0, TRUE)
+# 
+# #Summary Count of Taxonomic Ranks Observed pre SOM
+# Phylum <- length(get_taxa_unique(phy_dockweiler, "Phylum"))
+# Phylum <- as.data.frame(Phylum)
+# Class <- length(get_taxa_unique(phy_dockweiler, "Class"))
+# Class <- as.data.frame(Class)
+# Order <- length(get_taxa_unique(phy_dockweiler, "Order"))-2
+# Order <- as.data.frame(Order)
+# Family <- length(get_taxa_unique(phy_dockweiler, "Family"))-1
+# Family <- as.data.frame(Family)
+# Genus <- length(get_taxa_unique(phy_dockweiler, "Genus"))-1
+# Genus <- as.data.frame(Genus)
+# Species <- length(get_taxa_unique(phy_dockweiler, "Species"))-1
+# Species <- as.data.frame(Species)
+# 
+# table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+# 
+# rownames(table_step3) <- "Unique"
+# 
+# table_step3
+
+#inner newport Site Only
+subset_samples(physeq_obj.occ_reads, Site=="Inner DeAnza Peninsula") -> phy_inner_newport
+phy_inner_newport = filter_taxa(phy_inner_newport, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_inner_newport, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_inner_newport, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_inner_newport, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_inner_newport, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_inner_newport, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_inner_newport, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+f#outer newport Site Only
+subset_samples(physeq_obj.occ_reads, Site=="Outer DeAnza Peninsula") -> phy_outer_newport
+phy_outer_newport = filter_taxa(phy_outer_newport, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_outer_newport, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_outer_newport, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_outer_newport, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_outer_newport, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_outer_newport, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_outer_newport, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+#two harbors Site Only
+subset_samples(physeq_obj.occ_reads, Site=="Two Harbors") -> phy_two_harbors
+phy_two_harbors = filter_taxa(phy_two_harbors, function(x) mean(x) > 0, TRUE)
+
+#Summary Count of Taxonomic Ranks Observed pre SOM
+Phylum <- length(get_taxa_unique(phy_two_harbors, "Phylum"))
+Phylum <- as.data.frame(Phylum)
+Class <- length(get_taxa_unique(phy_two_harbors, "Class"))
+Class <- as.data.frame(Class)
+Order <- length(get_taxa_unique(phy_two_harbors, "Order"))-1
+Order <- as.data.frame(Order)
+Family <- length(get_taxa_unique(phy_two_harbors, "Family"))
+Family <- as.data.frame(Family)
+Genus <- length(get_taxa_unique(phy_two_harbors, "Genus"))
+Genus <- as.data.frame(Genus)
+Species <- length(get_taxa_unique(phy_two_harbors, "Species"))
+Species <- as.data.frame(Species)
+
+table_step3 <- bind_cols(Phylum,Class,Order,Family,Genus,Species)
+
+rownames(table_step3) <- "Unique"
+
+table_step3
+
+
+### Color Generation
+
+#{r, results='hide', show=FALSE}
+col3.gr <- wes_palette(name = "Darjeeling1", n=5, type="discrete")
+col2.gr <- wes_palette(name = "Darjeeling2", n=5, type="discrete")
+col1.gr <- wes_palette(name = "GrandBudapest1", n=4, type="discrete")
+col4.gr <- wes_palette(name = "Royal1", n=4, type="discrete")
+col5.gr <- wes_palette(name = "GrandBudapest2", n=4, type="discrete")
+col6.gr <- wes_palette(name = "Chevalier1", n=4, type="discrete")
+col7.gr <- wes_palette(name = "Moonrise3", n=4, type="discrete")
+col8.gr <- wes_palette(name = "IsleofDogs1", n=4, type="discrete")
+col9.gr <- wes_palette(name = "IsleofDogs2", n=4, type="discrete")
+col10.gr <- wes_palette(name = "Zissou1", n=5, type="discrete")
+col11.gr <- wes_palette(name = "BottleRocket1", n=5, type="discrete")
+col12.gr <- wes_palette(name = "BottleRocket2", n=5, type="discrete")
+col13.gr <- wes_palette(name = "Rushmore1", n=5, type="discrete")
+col14.gr <- wes_palette(name = "Royal2", n=5, type="discrete")
+
+col_mpa <- c(col2.gr[2],col3.gr[1], col3.gr[2])
+col_mpa4 <- c(col3.gr[1], col2.gr[2],col3.gr[3] )
+col_mpa_2 <- c(col3.gr[3],col3.gr[2], col3.gr[1])
+col_mpa_3 <- c(col3.gr[1],col2.gr[2], col3.gr[2])
+
+col.great <- c(col5.gr[1],col3.gr[1],col1.gr[2],col3.gr[4],col6.gr[2],col10.gr[4],col2.gr[4],col2.gr[2],col10.gr[1],col4.gr[1],col4.gr[3],col7.gr[2],col7.gr[3],col4.gr[3])
+
+col.great4 <- c(col5.gr[1],col3.gr[1],col1.gr[2],col2.gr[4],col2.gr[2],col10.gr[1],col3.gr[2],col13.gr[3],col14.gr[5],col4.gr[1],col4.gr[3],col7.gr[2],col7.gr[3],col4.gr[3])
+
+col.great3 <- c(col5.gr[1],col3.gr[1],col1.gr[2],col2.gr[4],col2.gr[2],col10.gr[1],col3.gr[2],col13.gr[3],col14.gr[5],col4.gr[1],col4.gr[3],col7.gr[2],col7.gr[3],col4.gr[3])
+
+col.great2 <- c(col3.gr[1],col3.gr[1],col1.gr[2],col5.gr[1],col2.gr[2],col2.gr[4],col2.gr[2],col10.gr[1],col13.gr[3],col13.gr[3],col14.gr[5],col3.gr[2],col4.gr[1],col4.gr[3],col7.gr[2],col7.gr[3],col4.gr[3])
+
+col_grad <- c(col10.gr[1],col2.gr[2],col3.gr[2])
+
+
+#Alpha diversity  
+
+###Sample Read Depth
+
+
+
+gg1 <- ggrare(physeq_obj.occ_reads, color ="Site")
+
+gg2<- gg1 +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) + theme(axis.text=element_text(size=10),axis.title=element_text(size=10)) +
+  theme(legend.title = element_blank()) +
+  theme(strip.background = element_blank(),strip.text.x = element_blank()) +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x))) +
+  labs(y= "Species", x = "Sample Sequence Depth")
+
+plot(gg2)
+
+here()
+ggsave(filename = here("Plos_Seagrass","rarefaction_sequence.eps"),
+       plot = gg2,
+       device = cairo_ps,
+       dpi = 300,
+       width = 7.5,
+       height = 5.5,
+       units = c("in"))
+
+
+## Figure S1
+
+#{r}
+
+ggsave(filename = here("Desktop", "Rarefaction_curve_site.eps"),
+       plot = plot(gg1),
+       device = grDevices::cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 6,
+       units = c("in"))
+
+
+
+## ANOVA Between Sites
+
+#{r, ANOVA Observed Taxa Between Sites}
+# Anova between sites
+
+seagrass.alpha.diversity <- estimate_richness(physeq_obj.occ_reads, measures = c("Observed"))
+data <- cbind(sample_data(physeq_obj.occ_reads), seagrass.alpha.diversity)
+
+alpha.diversity <- estimate_richness(physeq_obj.occ_reads, measures = c("Observed"))
+#data <- cbind(sample_data(physeq_obj.occ_reads), alpha.diversity)
+
+# data.sub.amarillo <- subset(data,data$Site == "Amarilllo")
+# data.sub.BG <- subset(data,data$Site == "Big Geiger")
+# data.sub.BG.summer <- subset(data.sub.BG, data.sub.BG$Season == "Summer")
+
+
+
+model=lm(data$Observed ~ data$Site) 
+ANOVA=aov(model)
+summary(ANOVA)
+
+
+
+
+#{r TUKEY Observed Taxa Between Sites}
+# Tukey test to study each pair of treatment :
+data$Site <- as.factor(data$Site) #ensure that Sites are factors  #site
+TUKEY <- TukeyHSD(x=ANOVA, 'data$Site', conf.level=0.95) 
+TUKEY
+
+
+
+
+#{r Observed Taxa Box Plot}
+#Function for determining signficant Groups from Tukey
+generate_label_df <- function(TUKEY, variable){
+  
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- TUKEY[[variable]][,4]
+  Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+  
+  #I need to put the labels in the same order as in the boxplot :
+  Tukey.labels$treatment=rownames(Tukey.labels)
+  Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+  return(Tukey.labels)
+}
+
+#Determine Groups of Samples
+labels<-generate_label_df(TUKEY , "data$Site") #generate labels of groups using function 
+names(labels)<-c('Letters','Site') #rename columns for merging
+
+#Obtain letter position for y axis using means
+yvalue<-aggregate(Observed~Site, data=data, mean) 
+
+final<-merge(labels,yvalue) #merge dataframes
+
+#newSTorder = c("MPA", "Edge", "Outside")
+
+dev.off()
+# Plot Boxplot of Observed Species w/ Signficant Groups labeled
+t <- plot_richness(physeq_obj.occ_reads, x = ("Site"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Site", alpha=0.2), width=0.75, trim=FALSE) +  geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  theme(axis.text=element_text(size=1), axis.title=element_text(size=10,face="bold")) + theme(legend.title = element_blank()) +theme(legend.position = "none") +
+  theme(strip.background = element_blank(),strip.text.x = element_blank()) + ggrepel()
+
+#t$data$Site <- as.character(t$data$Site)
+#t$data$Site <- factor(t$data$Site, levels=newSTorder)
+#t$data$Season <- as.character(t$data$Season
+
+t
+
+ggsave(filename = here("Desktop","Species_Richness_Seasons.eps"),
+       plot = plot(t),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 6,
+       units = c("in"))
+
+
+### Levene Test
+
+
+leveneTest(Observed~Season, data = data)
+
+
+
+
+## Venn Diagram
+
+#### Create Separate Objects by Site
+
+#{r Venn Diagram of Species Between Sites, results="hide",warning=FALSE}
+
+#look at venn diagram script#
+
+
+#### Groupings
+
+#Common Species
+#intersect(intersect(outside_species_df$Species,edge_species_df$Species), mpa_species_df$Species) -> common_species
+#intersect(geiger_species_df$Species,cherry_species_df$Species) -> common_species
+intersect(intersect(geiger_species_df$Species,cherry_species_df$Species), two_harbor_species_df$Species) -> common_species
+
+#Species Unique to Geiger Site
+#setdiff(geiger_species_df$Species, cherry_species_df$Species) -> geiger_species_unique
+setdiff(geiger_species_df$Species,union(two_harbor_species_df$Species, cherry_species_df$Species)) -> geiger_species_only
+
+#Species Unique to Cherry Site
+#setdiff(cherry_species_df$Species, geiger_species_df$Species) -> cherry_species_unique
+setdiff(cherry_species_df$Species,union(two_harbor_species_df$Species, geiger_species_df$Species)) -> cherry_species_only
+
+#Species Unique to Two Harbors Site
+setdiff(two_harbor_species_df$Species,union(geiger_species_df$Species, cherry_species_df$Species)) -> two_harbor_species_only
+
+#Edge and Outside Shared
+intersect(geiger_species_df$Species, cherry_species_df$Species) -> geiger_cherry_species_common
+setdiff(geiger_cherry_species_common, common_species) -> gc_common
+
+#MPA and Outside Shared
+intersect(geiger_species_df$Species, two_harbor_species_df$Species) -> geiger_two_harbor_species_common
+setdiff(geiger_two_harbor_species_common, common_species) -> gth_common
+#setdiff(intersect(geiger_species_df$Species, two_harbor_species_df$Species)),cherry_species_df$Species) -> geiger_two_harbor_species_common
+
+#Edge and MPA Shared
+intersect(cherry_species_df$Species, two_harbor_species_df$Species) -> cherry_two_harbor_species_common
+setdiff(cherry_two_harbor_species_common,common_species) -> cth_common
+#setdiff(intersect(cherry_species_df$Species, two_harbor_species_df$Species),geiger_species_df$Species) -> cherry_two_harbor_species_common
+
+# 
+# venn.plot <- draw.triple.venn(
+#   area1 = 65,
+#   area2 = 75,
+#   area3 = 85,
+#   n12 = 35,
+#   n23 = 15,
+#   n13 = 25,
+#   n123 = 5)
+
+#### Figure 2
+
+length(geiger_species_df$Species)
+
+dev.off()
+venn_plot <- draw.triple.venn(area1 = length(geiger_species_df$Species),
+                              area2 = length(cherry_species_df$Species),
+                              area3 = length(two_harbor_species_df$Species),
+                              n12 = (length(gc_common)+ length(common_species)),
+                              n23 = (length(cth_common) + length(common_species)),
+                              n13 = (length(gth_common) + length(common_species)),
+                              n123 = length(common_species),
+                              lwd = rep(1, 3),
+                              lty =rep("solid", 3),
+                              col = rep("black", 3),
+                              cex= rep(2, 7),
+                              cat.pos = c(-40, 40, 180),
+                              cat.dist =c(0.08, 0.08, 0.08),
+                              fontface = rep("plain", 7),
+                              fontfamily = rep("sans", 7),
+                              cat.cex = rep(1, 1),
+                              cat.fontface = rep("plain", 3),
+                              cat.fontfamily = rep("sans", 3),
+                              category = c("Big Geiger", "Cherry Cove", "Two Harbors"),
+                              fill = c(col_mpa[3],col_mpa[2],col_mpa[1]),
+                              alpha = 0.5)
+
+grid.draw(venn_plot)
+grid.arrange(gTree(children=venn_plot), top="Catalina Species", bottom="")
+
+# venn_plot <- draw.pairwise.venn(area1 = length(geiger_species_df$Species),
+#                               area2 = length(cherry_species_df$Species),
+#                               n12 = (length(geiger_edge_species_common)+length(common_species)),
+#                               #n23 = (length(edge_mpa_species_common)+length(common_species)),
+#                               cross.area = length(common_species),
+#                               fill = c(col_mpa[3],col_mpa[2]),
+#                               alpha = 0.8)
+
+#grid.draw(venn_plot)
+
+
+ggsave(venn_plot, file="catalina_venn_.pdf", device = "pdf")
+
+# #ggsave(filename = here("Desktop","Catalina_venn.eps"),
+#        plot = plot(venn_plot),
+#        device = cairo_ps,
+#        dpi = 300,
+#        width = 12,
+#        height = 6,
+#        units = c("in"))
+
+
+
+#{r, Comparison of Taxa Across All Sites}
+physeq_obj.occ_reads %>% 
+  taxa_names() %>% 
+  as.data.frame() %>%
+  transmute(.,Species = .) %>% 
+  mutate(., Common_species = Species %in% common_species) %>% 
+  mutate(., Outside_species_unique = Species %in% outside_species_unique) %>% 
+  mutate(., Edge_species_unique = Species %in% edge_species_unique) %>% 
+  mutate(., Mpa_species_unique = Species %in% mpa_species_unique) %>% 
+  mutate(., Outside_edge_species_common = Species %in% outside_edge_species_common) %>% 
+  mutate(., Outside_mpa_species_common = Species %in% outside_mpa_species_common) %>% 
+  mutate(., Edge_mpa_species_common = Species %in% edge_mpa_species_common) %>% 
+  mutate(., Species_found = case_when(Common_species == TRUE ~ "Common_species",
+                                      Outside_species_unique == TRUE ~ "Outside_species_unique",
+                                      Edge_species_unique == TRUE ~ "Edge_species_unique",
+                                      Mpa_species_unique == TRUE ~ "Mpa_species_unique",
+                                      Outside_edge_species_common == TRUE ~ "Outside_edge_species_common",
+                                      Outside_mpa_species_common == TRUE ~ "Outside_mpa_species_common",
+                                      Mpa_species_unique == TRUE ~ "Mpa_species_unique",
+                                      Edge_mpa_species_common == TRUE ~ "Edge_mpa_species_common"
+  )) %>% 
+  dplyr::select(Species,Species_found) %>% arrange(desc(Species_found))-> species_locations
+
+write_csv(species_locations, here("analysis","Output","venn_list.csv"))
+
+
+### Pre Occupancy Pattern
+#r Venn Diagram of Species Between Sites, results="hide",warning=FALSE}
+outside_pre <- physeq_obj.pre_reads %>% subset_samples(Site == "Outside")
+edge_pre <- physeq_obj.pre_reads %>% subset_samples(Site == "Edge")
+mpa_pre <- physeq_obj.pre_reads %>% subset_samples(Site == "MPA")
+
+outside_pre <- prune_taxa(
+  taxa = apply(otu_table(outside_pre), 1, function(x){sum(x>0) >= 1}), 
+  x = outside_pre)
+
+edge_pre <- prune_taxa(
+  taxa = apply(otu_table(edge_pre), 1, function(x){sum(x>0) >= 1}), 
+  x = edge_pre)
+
+mpa_pre <- prune_taxa(
+  taxa = apply(otu_table(mpa_pre), 1, function(x){sum(x>0) >= 1}), 
+  x = mpa_pre)
+
+outside_species_pre <- taxa_names(outside_pre)
+edge_species_pre <- taxa_names(edge_pre)
+mpa_species_pre <- taxa_names(mpa_pre)
+
+outside_species_pre_df <- as.data.frame(outside_species_pre)
+edge_species_pre_df <- as.data.frame(edge_species_pre)
+mpa_species_pre_df <- as.data.frame(mpa_species_pre)
+
+names(outside_species_pre_df) <- "Species"
+names(edge_species_pre_df) <- "Species"
+names(mpa_species_pre_df) <- "Species"
+#```
+
+#### Groupings
+#```{r}
+#Common Species
+intersect(intersect(outside_species_pre_df$Species,edge_species_pre_df$Species), mpa_species_pre_df$Species) -> common_species_pre
+
+#Species Unique to Outside Site
+setdiff(outside_species_pre_df$Species,union(mpa_species_pre_df$Species, edge_species_pre_df$Species)) -> outside_species_unique_pre
+
+#Species Unique to Edge Site
+setdiff(edge_species_pre_df$Species,union(mpa_species_pre_df$Species, outside_species_pre_df$Species)) -> edge_species_unique_pre
+
+#Species Unique to MPA Site
+setdiff(mpa_species_pre_df$Species,union(outside_species_pre_df$Species, edge_species_pre_df$Species)) -> mpa_species_unique_pre
+
+#Edge and Outside Shared
+setdiff(intersect(outside_species_pre_df$Species, edge_species_pre_df$Species),mpa_species_pre_df$Species) -> outside_edge_species_common_pre
+
+#MPA and Outside Shared
+setdiff(intersect(outside_species_pre_df$Species, mpa_species_pre_df$Species),edge_species_pre_df$Species) -> outside_mpa_species_common_pre
+
+#Edge and MPA Shared
+setdiff(intersect(mpa_species_df$Species, edge_species_pre_df$Species),outside_species_pre_df$Species) -> edge_mpa_species_common_pre
+
+#{r, Comparison of Taxa Across All Sites}
+physeq_obj.pre_reads %>% 
+  taxa_names() %>% 
+  as.data.frame() %>%
+  transmute(.,Species = .) %>% 
+  mutate(., Common_species = Species %in% common_species_pre) %>% 
+  mutate(., Outside_species_unique = Species %in% outside_species_unique_pre) %>% 
+  mutate(., Edge_species_unique = Species %in% edge_species_unique_pre) %>% 
+  mutate(., Mpa_species_unique = Species %in% mpa_species_unique_pre) %>% 
+  mutate(., Outside_edge_species_common = Species %in% outside_edge_species_common_pre) %>% 
+  mutate(., Outside_mpa_species_common = Species %in% outside_mpa_species_common_pre) %>% 
+  mutate(., Edge_mpa_species_common = Species %in% edge_mpa_species_common_pre) %>% 
+  mutate(., Species_found = case_when(Common_species == TRUE ~ "Common_species",
+                                      Outside_species_unique == TRUE ~ "Outside_species_unique",
+                                      Edge_species_unique == TRUE ~ "Edge_species_unique",
+                                      Mpa_species_unique == TRUE ~ "Mpa_species_unique",
+                                      Outside_edge_species_common == TRUE ~ "Outside_edge_species_common",
+                                      Outside_mpa_species_common == TRUE ~ "Outside_mpa_species_common",
+                                      Mpa_species_unique == TRUE ~ "Mpa_species_unique",
+                                      Edge_mpa_species_common == TRUE ~ "Edge_mpa_species_common"
+  )) %>% 
+  filter(., Species %in% species_locations$Species) %>% 
+  dplyr::select(Species,Species_found) %>% arrange(desc(Species_found))-> species_locations_pre
+
+write_csv(species_locations_pre, here("analysis","Output","venn_list_pre.csv"))
+#```
+
+## Species Accumulation Curves  
+
+
+#```{r}
+#Convert to iNEXT format from Observed Species (incidence frequencies)
+physeq_obj.noncontam_no_lab.binary <- transform_sample_counts(physeq_obj.pre_reads, function(abund) 1*(abund>0))
+#Subset Samples
+PP.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Big Geiger Cove") #mpa
+PedRF.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Cherry Cove") #outside
+LSC.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Two Harbors") #edge
+AM.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Amarillo")
+#Dock.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Dockweiler")
+IN.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Inner DeAnza Peninsula")
+Out.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Outer DeAnza Peninsula")
+
+#Convert to Vegan Dataframe
+#veganComm2.bin <- vegan_otu(physeq_obj.noncontam_no_lab.binary)
+veganCommpp.bin <- vegan_otu(PP.bin)
+veganComm2pedrf.bin <- vegan_otu(PedRF.bin)
+veganCommlsc.bin <- vegan_otu(LSC.bin)
+veganCommAM.bin <- vegan_otu(AM.bin)
+#veganCommDock.bin <- vegan_otu(Dock.bin)
+veganCommIN.bin <- vegan_otu(IN.bin)
+veganCommOut.bin <- vegan_otu(Out.bin)
+
+#Create List for iNEXT Species Incidence Frequencies
+mpa_inc <-list ("Big Geiger"=t(veganCommpp.bin),"Cherry Cove"=t(veganComm2pedrf.bin) , "Two Harbors" = t(veganCommlsc.bin), "Amarillo" =t(veganCommAM.bin), "Inner Newport" = t(veganCommIN.bin), "Outer Newport" = t(veganCommOut.bin))
+#mpa_inc <- list ("Big Geiger"=t(veganCommpp.bin), "Two Harbors" = t(veganCommlsc.bin), "Amarillo" =t(veganCommAM.bin) )
+
+species_incidence <-lapply(mpa_inc, as.incfreq)
+#Convert to iNEXT format
+t <- seq(1, 50, by=1)
+out.inc <- iNEXT(species_incidence, q=0, datatype="incidence_freq", size=t)
+out.inc$iNextEst
+
+# Sample‐size‐based R/E curves
+
+#Sample‐size‐based R/E curves
+# ggiNEXT(out.inc, type=1, color.var="site") + 
+#   theme_bw(base_size = 18) + scale_fill_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) +  scale_color_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) + ggtitle("All Species Rarefaction Curve") +scale_x_continuous()+scale_y_continuous(breaks=seq(0,80,5)) + expand_limits(x = 0, y = 0)+ xlab("Samples") +ylab("Species")
+ggiNEXT(out.inc, type=1) + 
+  theme_bw(base_size = 18) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) + ggtitle("All Species Rarefaction Curve") +scale_x_continuous()+scale_y_continuous() + expand_limits(x = 0, y = 0)+ xlab("Samples") +ylab("Species")
+
+#```
+
+
+#```{r}
+#Convert to iNEXT format from Observed Species (incidence frequencies)
+physeq_obj.noncontam_no_lab.binary <- transform_sample_counts(physeq_obj.occ_reads, function(abund) 1*(abund>0))
+#Subset Samples
+PP.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="MPA")
+PedRF.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Outside")
+LSC.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Edge")
+
+#Convert to Vegan Dataframe
+veganComm2.bin <- vegan_otu(physeq_obj.noncontam_no_lab.binary)
+veganCommpp.bin <- vegan_otu(PP.bin)
+veganComm2pedrf.bin <- vegan_otu(PedRF.bin)
+veganCommlsc.bin <- vegan_otu(LSC.bin)
+
+#Create List for iNEXT Species Incidence Frequencies
+mpa_inc <-list ("MPA"=t(veganCommpp.bin),"Edge"=t(veganCommlsc.bin), "Outside" = t(veganComm2pedrf.bin))
+
+species_incidence <-lapply(mpa_inc, as.incfreq)
+
+#Convert to iNEXT format
+t <- seq(1, 12, by=1)
+out.inc.2 <- iNEXT(species_incidence, q=0, datatype="incidence_freq", size=t)
+out.inc.2$iNextEst
+# Sample‐size‐based R/E curves
+col_mpa_2 <- c(col3.gr[3],col3.gr[2], col3.gr[1])
+
+#Sample‐size‐based R/E curves
+
+ggiNEXT(out.inc.2, type=1, color.var="site") + 
+  theme_bw(base_size = 18)  + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) + ggtitle(">84% Occupancy Species Rarefaction Curve") +ylim(0,75) + xlim(1,15) +scale_x_continuous(breaks=c(1,3,6,9,12,15)) + xlab("Samples") +ylab("Species")
+#```
+## Figure 3
+#```{r}
+p1 <- ggiNEXT(out.inc, type=1, color.var="site") + 
+  theme_bw(base_size = 18) + scale_fill_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) +  scale_color_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(),legend.position = "none") + ggtitle("All Species") +ylim(0,90) + xlim(1,15) +scale_x_continuous(breaks=c(1,3,6,9,12,15)) + xlab("Samples") +ylab("Species")
+
+p2 <- ggiNEXT(out.inc.2, type=1, color.var="site") + 
+  theme_bw(base_size = 18) + scale_fill_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) +  scale_color_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) + guides(linetype=FALSE, color=guide_legend("Site"), fill=guide_legend("Site"),shape=guide_legend("Site")) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(),legend.position = c(.85, .85)) + ggtitle("Species with Occupancy > 84%") +ylim(0,90) + xlim(1,15) +scale_x_continuous(breaks=c(1,3,6,9,12,15)) + xlab("Samples") +ylab("Species")
+
+# line is drawn on the 2nd layer, default size is 1.5
+
+gb4 <- ggplot_build(p2)
+gb4$data[[1]]$size <-2
+gb4$data[[2]]$size <- 0.75
+gt4 <- ggplot_gtable(gb4)
+
+gb3 <- ggplot_build(p1)
+gb3$data[[1]]$size <-2
+gb3$data[[2]]$size <- 0.75
+gt3 <- ggplot_gtable(gb3)
+
+grid.arrange(gt3, gt4, ncol=2)
+#```
+
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig3.eps"),
+       plot = grid.arrange(gt3, gt4, ncol=2),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 6,
+       units = c("in"))
+
+#```
+
+### Segmented
+#```{r}
+out.inc$iNextEst$'Cherry Cove' %>% as.tibble() %>% mutate(., x=t,y=qD)> mpa_tib
+lm(y~x, mpa_tib) -> lin.mod.mpa
+
+segmented.mod.mpa <- segmented(lin.mod.mpa, seg.Z = ~x)
+
+out.inc$iNextEst$coverage_based
+
+out.inc$iNextEst$`Big Geiger` %>% as.tibble() %>% mutate(., x=t,y=qD)-> edge_tib
+lm(y~x, edge_tib) -> lin.mod.edge
+
+segmented.mod.edge <- segmented(lin.mod.edge, seg.Z = ~x)
+
+out.inc$iNextEst$`Two Harbors` %>% as.tibble() %>% mutate(., x=t,y=qD)-> out_tib
+lm(y~x, out_tib) -> lin.mod.out
+
+segmented.mod.out <- segmented(lin.mod.out, seg.Z = ~x)
+
+mean(segmented.mod.out$psi[2],segmented.mod.mpa$psi[2],segmented.mod.edge$psi[2])
+c(segmented.mod.out$psi[2],segmented.mod.mpa$psi[2],segmented.mod.edge$psi[2])
+
+
+#```
+
+#Beta Diversity
+
+## PERMANOVA
+
+### Bray-Curtis
+
+#```{r}
+#Generate Vegan formatted data table
+sampledf <- data.frame(sample_data(physeq_obj.occ))
+carnivore_rel_abun<- vegan_otu(physeq_obj.occ)
+
+#Bray curtis dissimilarity matrix
+d_carn <- vegdist(carnivore_rel_abun, method="bray") 
+
+#Permanova
+sampledf$Season <- as.character(sampledf$Season)
+sampledf$Site <- as.character(sampledf$Site)
+
+colnames(carnivore_rel_abun)
+
+x <- adonis(carnivore_rel_abun~ sampledf$Site)
+x
+
+
+
+#```
+### Jaccard
+
+#```{r}
+#Generate Vegan formatted data table
+sampledf <- data.frame(sample_data(physeq_obj.occ))
+carnivore_rel_abun<- vegan_otu(physeq_obj.occ)
+
+#Bray curtis dissimilarity matrix
+d_carn_j <- vegdist(carnivore_rel_abun, method="jaccard", binary=TRUE) 
+
+#Permanova
+broom::tidy(adonis(carnivore_rel_abun~ sampledf$Site+ sampledf$Season, method="jaccard", binary=TRUE)$aov.tab)
+
+#```
+
+## Homogeneity of dispersions test
+
+#```{r}
+
+betadisper(d_carn, getElement(sampledf, "Site"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledf, "Site"))))
+#```
+
+#```{r}
+betadisper(d_carn, getElement(sampledf, "Location"))
+broom::tidy(TukeyHSD(betadisper(d_carn, getElement(sampledf, "Location"))))
+
+#``
+
+## NMDS Plots
+
+  
+  #```{r, results="hide",warning=FALSE}
+# NMDS ordination
+ord <- ordinate(physeq_obj.occ, method = "NMDS", distance = d_carn)
+ord
+nmdsplot <- plot_ordination(physeq_obj.occ, ord, color = "Site", shape="Season") +
+  geom_point(size=2) +
+  theme_bw()  + stat_ellipse(geom = "path", type="norm", aes(group=Site, color=Site),linetype = 2)  + scale_color_manual(values=col.great)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=8),
+        axis.title=element_text(size=10,face="bold"),legend.title = element_text( size=6, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Location")
+
+nmdsplot
+#```
+## Figure 4
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig4.eps"),
+       plot = plot(nmdsplot),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
+
+#```{r, results="hide",warning=FALSE}
+# NMDS ordination
+ord_j <- ordinate(physeq_obj.occ, method = "NMDS", distance = d_carn_j)
+ord_j
+
+sample_data(physeq_obj.occ)
+
+nmdsplot_j <- plot_ordination(physeq_obj.occ, ord_j, color = "Site", shape="Season") +
+  geom_point(size=2) +
+  theme_bw()  + stat_ellipse(geom = "path", type="norm", aes(group=Site, color=Site),linetype = 2)  + scale_color_manual(values=c(values=col.great))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text=element_text(size=16),
+        axis.title=element_text(size=20,face="bold"),legend.title = element_text( size=12, face="bold"),legend.text = element_text(size=10, face="bold")) + labs(shape="Site")
+
+nmdsplot_j
+#```
+## Figure S2
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig_S2.eps"),
+       plot = plot(nmdsplot_j),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
+
+
+## Constrained Analysis of Principle Components
+  
+  
+  #```{r}
+#Constrained Analysis of Principle Components
+cap_ord <- ordinate(
+  physeq = physeq_obj.occ, 
+  method = "CAP",
+  distance = d_carn,
+  formula = ~ Site+Season
+)
+#Results of model
+anova(cap_ord)
+#```
+
+#```{r, results="hide",warning=FALSE}
+sample_data(physeq_obj.occ)$Location <- c("Edge_A","Edge_A","Edge_A", "Edge_B", "Edge_B", "Edge_B", "Edge_C","Edge_C","Edge_C","Outside_A","Outside_A","Outside_A","Outside_B","Outside_B","Outside_B","Outside_C","Outside_C","Outside_C","MPA_A","MPA_A","MPA_A", "MPA_B","MPA_B","MPA_B", "MPA_C","MPA_C","MPA_C")
+sampledf$Location <- sample_data(physeq_obj.occ)$Location
+
+# CAP plot of environmental predictor variables
+sample_data(physeq_obj.occ)$Season = factor(sample_data(physeq_obj.occ)$Season)
+
+cap_plot <- plot_ordination(
+  physeq = physeq_obj.occ, 
+  ordination = cap_ord, 
+  color = "Season", 
+  axes = c(1,2)) + 
+  aes(shape = Site) + 
+  geom_point(aes(colour = Season), size = 4) + 
+  geom_point(colour = "grey90", size = 1.5) + 
+  scale_color_manual(values = c(col.great4))
+
+cap_plot
+
+# Now add the environmental variables as arrows
+arrowmat <- vegan::scores(cap_ord, display = "bp")
+
+# Add labels, make a data.frame
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat)
+arrowdf %>% filter(., labels=="SiteMPA") ->arrowdf
+#arrowdf$labels <- c("MPA")
+
+# Define the arrow aesthetic mapping
+arrow_map <- aes(xend = CAP1, 
+                 yend = CAP2, 
+                 x = 0, 
+                 y = 0, 
+                 shape = NULL, 
+                 color = NULL, 
+                 label = labels)
+
+label_map <- aes(x = 0.92 * CAP1, 
+                 y = 1.3 * CAP2, 
+                 shape = NULL, 
+                 color = NULL, 
+                 label = labels)
+
+arrowhead = arrow(length = unit(0.02, "npc"))
+
+#Hulls for each polygon
+
+test <- vegan::scores(cap_ord, display = "sites")
+
+data.scores_1 <- as.data.frame(scores(test))  
+#Using the scores function from vegan to extract the site scores and 
+# convert to a data.frame
+data.scores_1$Site <- sampledf$Site  
+# create a column of site names, from the rownames of data.scores
+
+#Add location data
+grp <- sampledf$Site
+data.scores_1$grp <- grp  #  add the grp variable created earlier
+
+#### Calculate Shape Around Points
+grp.Amarillo <- data.scores_1[data.scores_1$grp == "Amarilllo", ][chull(data.scores_1[data.scores_1$grp == "Amarillo", c("CAP1", "CAP2")]), ]  
+grp.Edge_B <- data.scores_1[data.scores_1$grp == "Big Geiger", ][chull(data.scores_1[data.scores_1$grp == "Big Geiger", c("CAP1", "CAP2")]), ]
+grp.Edge_C <- data.scores_1[data.scores_1$grp == "Edge_C", ][chull(data.scores_1[data.scores_1$grp == "Edge_C", c("CAP1", "CAP2")]), ]
+grp.Outside_A <- data.scores_1[data.scores_1$grp == "Outside_A", ][chull(data.scores_1[data.scores_1$grp == "Outside_A", c("CAP1", "CAP2")]), ]  
+grp.Outside_B <- data.scores_1[data.scores_1$grp == "Outside_B", ][chull(data.scores_1[data.scores_1$grp == "Outside_B", c("CAP1", "CAP2")]), ]
+grp.Outside_C <- data.scores_1[data.scores_1$grp == "Outside_C", ][chull(data.scores_1[data.scores_1$grp == "Outside_C", c("CAP1", "CAP2")]), ]
+grp.MPA_A <- data.scores_1[data.scores_1$grp == "MPA_A", ][chull(data.scores_1[data.scores_1$grp == "MPA_A", c("CAP1", "CAP2")]), ]  
+grp.MPA_B <- data.scores_1[data.scores_1$grp == "MPA_B", ][chull(data.scores_1[data.scores_1$grp == "MPA_B", c("CAP1", "CAP2")]), ]
+grp.MPA_C <- data.scores_1[data.scores_1$grp == "MPA_C", ][chull(data.scores_1[data.scores_1$grp == "MPA_C", c("CAP1", "CAP2")]), ]
+
+hull.data <- rbind(grp.Edge_A, grp.Edge_B,grp.Edge_C,grp.Outside_A,grp.Outside_B,grp.Outside_C,grp.MPA_A,grp.MPA_B,grp.MPA_C)
+colnames(hull.data)[4] <- c("Location")
+
+# Make a new graphic for the constrained ordination
+
+cap_1 <- cap_plot +  
+  theme_bw(base_size = 18)+
+  geom_segment(
+    mapping = arrow_map, 
+    size = .5, 
+    data = arrowdf, 
+    color = "grey", 
+    arrow = arrowhead
+  ) +
+  geom_text(
+    mapping = label_map, 
+    size = 6,  
+    data = arrowdf, 
+    show.legend = FALSE
+  ) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(),  panel.border = element_rect(colour = "black", fill=NA, size=2))+
+  # scale_fill_manual(name  ="Location",
+  #                   breaks=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"),
+  #                   labels=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"), 
+  #                   values = c(col.great4))+
+  geom_polygon(data=hull.data,aes(x=CAP1,y=CAP2,fill=grp, group=grp),alpha=0.30) + 
+  # scale_fill_manual(name  ="Location",
+  #                   breaks=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"),
+  #                   labels=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"),
+  #                   values = c(col.great4)) +
+  ggtitle("Constrained Analysis of Principle Components")
+
+cap_1
+
+#```
+
+#```{r}
+ggsave(filename = here("analysis","Figures","CAP.eps"),
+       plot = plot(cap_1),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
+
+
+##### CAP ordinate
+
+  
+  #```{r, results="hide",warning=FALSE}
+#Run CAP analysis to identify predictor species
+vare.cap <- capscale(carnivore_rel_abun ~ Site + Location, data=sampledf, dist="bray")
+
+#Retain species scores
+sppscores(vare.cap) <- carnivore_rel_abun
+
+as.data.frame(vegan::scores(vare.cap, display="species")) %>% 
+  rownames_to_column(var = "sample") %>% 
+  as.tibble %>%
+  mutate(dist = sqrt((CAP1 - 0)^2 + (CAP2 - 0)^2)) -> vare.cap_species_distances
+#```
+### Check For Break Point for Top Species
+#```{r}
+species_distances <- as.data.frame(vare.cap_species_distances)
+rownames(species_distances) <- species_distances$sample
+
+# Now add the environmental variables as arrows
+arrowmat <- species_distances
+
+#Rename row names to clean up plot
+
+rownames(species_distances) %>% as.data.frame() -> namers
+colnames(namers) <- c("path")
+namers %>% separate(path, c("D1","P1","C1","O1","F1","G1","Species"), sep=";") %>% replace(is.na(.), "") %>% 
+  mutate(., name = ifelse(Species == "", G1, Species)) %>% 
+  mutate(., name = ifelse(name == "", F1, name)) %>% 
+  mutate(., name = ifelse(name == "", O1, name)) %>% 
+  mutate(., name = ifelse(name == "", C1, name)) %>% 
+  mutate(., name = ifelse(name == "", P1, name))-> namers
+
+rownames(arrowmat) <- namers$name
+
+# Add labels, make a data.frame
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat)
+
+arrowdf %>% 
+  arrange(desc(dist)) %>% 
+  ggplot(., aes(x= reorder(labels, -dist), y=dist)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+#```
+
+#```{r}
+vare.cap_species_distances %>% 
+  top_n(7, dist) -> top_species
+top_species <- as.data.frame(top_species)
+rownames(top_species) <- top_species$sample
+
+# Now add the environmental variables as arrows
+arrowmat <- top_species
+
+#Rename row names to clean up plot
+
+rownames(top_species) %>% as.data.frame() -> namers
+colnames(namers) <- c("path")
+namers %>% separate(path, c("D","P","C","O","F","G","Species"), sep=";") %>% 
+  mutate(., name = ifelse(Species == "", G, Species)) -> namers
+
+rownames(arrowmat) <- namers$name
+
+# Add labels, make a data.frame
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat)
+
+# Define the arrow aesthetic mapping
+arrow_map <- aes(xend = CAP1, 
+                 yend = CAP2, 
+                 x = 0, 
+                 y = 0, 
+                 shape = NULL, 
+                 color = NULL, 
+                 label = labels)
+
+label_map <- aes(x = 0.75 * CAP1, 
+                 y = 0.75 * CAP2, 
+                 shape = NULL, 
+                 color = NULL, 
+                 label = labels)
+
+arrowhead = arrow(length = unit(0.02, "npc"))
+
+#Hulls for each polygon
+
+test.2 <- as.data.frame(vare.cap$CCA$wa)
+
+data.scores_1 <- as.data.frame(scores(test.2))  
+#Using the scores function from vegan to extract the site scores and 
+# convert to a data.frame
+data.scores_1$Site <- sampledf$Site  
+# create a column of site names, from the rownames of data.scores
+head(data.scores_1) 
+
+grp <- sampledf$Location
+data.scores_1$grp <- grp  #  add the grp variable created earlier
+
+#Add location data
+grp <- sampledf$Location
+data.scores_1$grp <- grp  #  add the grp variable created earlier
+
+#### Calculate Shape Around Points
+grp.Edge_A <- data.scores_1[data.scores_1$grp == "Edge_A", ][chull(data.scores_1[data.scores_1$grp == "Edge_A", c("CAP1", "CAP2")]), ]  
+grp.Edge_B <- data.scores_1[data.scores_1$grp == "Edge_B", ][chull(data.scores_1[data.scores_1$grp == "Edge_B", c("CAP1", "CAP2")]), ]
+grp.Edge_C <- data.scores_1[data.scores_1$grp == "Edge_C", ][chull(data.scores_1[data.scores_1$grp == "Edge_C", c("CAP1", "CAP2")]), ]
+grp.Outside_A <- data.scores_1[data.scores_1$grp == "Outside_A", ][chull(data.scores_1[data.scores_1$grp == "Outside_A", c("CAP1", "CAP2")]), ]  
+grp.Outside_B <- data.scores_1[data.scores_1$grp == "Outside_B", ][chull(data.scores_1[data.scores_1$grp == "Outside_B", c("CAP1", "CAP2")]), ]
+grp.Outside_C <- data.scores_1[data.scores_1$grp == "Outside_C", ][chull(data.scores_1[data.scores_1$grp == "Outside_C", c("CAP1", "CAP2")]), ]
+grp.MPA_A <- data.scores_1[data.scores_1$grp == "MPA_A", ][chull(data.scores_1[data.scores_1$grp == "MPA_A", c("CAP1", "CAP2")]), ]  
+grp.MPA_B <- data.scores_1[data.scores_1$grp == "MPA_B", ][chull(data.scores_1[data.scores_1$grp == "MPA_B", c("CAP1", "CAP2")]), ]
+grp.MPA_C <- data.scores_1[data.scores_1$grp == "MPA_C", ][chull(data.scores_1[data.scores_1$grp == "MPA_C", c("CAP1", "CAP2")]), ]
+
+hull.data <- rbind(grp.Edge_A, grp.Edge_B,grp.Edge_C,grp.Outside_A,grp.Outside_B,grp.Outside_C,grp.MPA_A,grp.MPA_B,grp.MPA_C)
+colnames(hull.data)[4] <- c("Location")
+
+
+# Plot CAP
+as.data.frame(vare.cap$CCA$wa) %>% 
+  rownames_to_column(var = "sample") %>% 
+  as.tibble() %>% 
+  separate(sample, into = c("Site","Location", "rep") , sep = "\\.", remove = F) %>%
+  mutate(Site1=Site) %>% 
+  unite(Site, Location, col= "Location", remove=F) %>% 
+  mutate(Location=dplyr::recode(Location, "Little_Scorpion_A"="Edge_A",
+                                "Little_Scorpion_B"= "Edge_B",
+                                "Little_Scorpion_C"="Edge_C",
+                                "Pedro_Reef_A"="Outside_A",
+                                "Pedro_Reef_B"="Outside_B",
+                                "Pedro_Reef_C"="Outside_C",
+                                "Potatoe_Pasture_A"="MPA_A",
+                                "Potatoe_Pasture_B"="MPA_B",
+                                "Potatoe_Pasture_C"="MPA_C")) %>% 
+  mutate(Site=dplyr::recode(Site, "Little_Scorpion"="Edge","Pedro_Reef"="Outside","Potatoe_Pasture"="MPA")) -> data_cap
+
+cap_species <-  data_cap %>% 
+  ggplot(aes(x=CAP1, y=CAP2)) + geom_point(aes(col=Location, shape=Site), size =3) + scale_color_manual(values = c(col.great3), labels=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C")) + geom_segment(
+    mapping = arrow_map, 
+    size = .5, 
+    data = arrowdf, 
+    color = "grey", 
+    arrow = arrowhead
+  ) +
+  geom_text(
+    mapping = label_map, 
+    size = 5,  
+    data = arrowdf, 
+    show.legend = FALSE,
+    position=position_jitter(width=0.05,height=0.08)
+  ) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(),  panel.border = element_rect(colour = "black", fill=NA, size=2))+
+  scale_fill_manual(name  ="Location",
+                    labels=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"),
+                    breaks=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"), 
+                    values = c(col.great3))+
+  geom_polygon(data=hull.data,aes(x=CAP1,y=CAP2,fill=grp, group=grp),alpha=0.30) + 
+  scale_fill_manual(name  ="Location",
+                    breaks=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"),
+                    labels=c("Edge_A", "Edge_B", "Edge_C","MPA_A", "MPA_B", "MPA_C","Outside_A","Outside_B","Outside_C"), 
+                    values = c(col.great3)) + ylab("CAP2 [8.8%]")   + xlab("CAP1 [20.9%]") +theme(plot.title = element_text(hjust = 0.5,size = 30, face = "bold"),
+                                                                                                  axis.text=element_text(size=20),
+                                                                                                  axis.title=element_text(size=24,face="bold"),
+                                                                                                  legend.title=element_text(size=20),
+                                                                                                  legend.text=element_text(size=18),
+                                                                                                  plot.subtitle = element_text(size=20),
+                                                                                                  legend.spacing.y = unit(0.5, 'cm'), 
+                                                                                                  legend.key = element_rect(size = 10),
+                                                                                                  legend.key.size = unit(2, 'lines'))
+
+cap_species
+#```
+### Figure 5
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig5.eps"),
+       plot = plot(cap_species),
+       device = cairo_ps,
+       dpi = 300,
+       width = 12,
+       height = 8,
+       units = c("in"))
+#```
+
+#NPS Data
+
+### Organize Data
+#```{r}
+nps_sites_path <- here("data","nps_species_sites_02032020.csv")
+nps_sites <- read.table(nps_sites_path, header = 1, sep = ",", stringsAsFactors = F)
+nps_sites <- as.data.frame(nps_sites)
+
+ped_nps <- nps_sites$PedRF_species
+lsc_nps <- nps_sites$LSC_species
+pp_nps <- nps_sites$PP_species
+
+append(append(ped_nps,lsc_nps),pp_nps) %>% unique() -> nps_all_unique
+
+ped_nps_df <- as.data.frame(ped_nps)
+lsc_nps_df <- as.data.frame(lsc_nps)
+pp_nps_df <- as.data.frame(pp_nps)
+
+names(ped_nps_df) <- "Species"
+names(lsc_nps_df) <- "Species"
+names(pp_nps_df) <- "Species"
+
+lsc_nps_df %>% 
+  filter(., Species !="") -> lsc_nps_df
+ped_nps_df %>% 
+  filter(., Species !="") -> ped_nps_df
+pp_nps_df %>% 
+  filter(., Species !="") -> pp_nps_df
+
+nps_all_unique %>%  sort()
+##```
+
+#```{r}
+# Common Species
+intersect(intersect(ped_nps_df$Species,lsc_nps_df$Species), pp_nps_df$Species) -> common_species_nps
+
+#Outside Species Unique
+setdiff(ped_nps_df$Species,union(pp_nps_df$Species, lsc_nps_df$Species)) -> outside_species_unique_nps
+
+#Outside Species Unique
+setdiff(lsc_nps_df$Species,union(pp_nps_df$Species, ped_nps_df$Species)) -> edge_species_unique_nps
+
+#Outside Species Unique
+setdiff(pp_nps_df$Species,union(ped_nps_df$Species, lsc_nps_df$Species)) -> mpa_species_unique_nps
+
+#Outside Edge Common
+setdiff(intersect(ped_nps_df$Species, lsc_nps_df$Species),pp_nps_df$Species) -> outside_edge_species_common_nps
+
+#Outside MPA Common
+setdiff(intersect(ped_nps_df$Species, pp_nps_df$Species),lsc_nps_df$Species) -> outside_mpa_species_common_nps
+
+#Edge MPA Common
+setdiff(intersect(pp_nps_df$Species, lsc_nps_df$Species),ped_nps_df$Species) -> edge_mpa_species_common_nps
+#```
+
+## Figure 6
+#```{r}
+grid.newpage()
+nps_venn_plot <- draw.triple.venn(area1 = length(ped_nps_df$Species),
+                                  area2 = length(lsc_nps_df$Species),
+                                  area3 = length(pp_nps_df$Species),
+                                  n12 = (length(outside_edge_species_common_nps)+length(common_species_nps)),
+                                  n23 = (length(edge_mpa_species_common_nps)+length(common_species_nps)),
+                                  n13 = (length(outside_mpa_species_common_nps)+length(common_species_nps)),
+                                  n123 = length(common_species_nps),
+                                  lwd = rep(1, 3),
+                                  lty =rep("solid", 3), 
+                                  col = rep("black", 3),
+                                  cex= rep(2, 7),
+                                  cat.pos = c(-40, 40, 180),
+                                  cat.dist =c(0.08, 0.08, 0.08),
+                                  fontface = rep("plain", 7),
+                                  fontfamily = rep("sans", 7),
+                                  cat.cex = rep(2, 3),
+                                  cat.fontface = rep("plain", 3),
+                                  cat.fontfamily = rep("sans", 3),
+                                  category = c("Outside", "Edge", "MPA"),  
+                                  fill = c(col_mpa[3],col_mpa[2],col_mpa[1]),
+                                  alpha = 0.8)
+
+
+
+
+#```
+
+
+#```{r}
+ggsave(filename = here("analysis","Figures","Fig6.eps"),
+       plot = grid.draw(nps_venn_plot),
+       device = cairo_ps,
+       dpi = 300,
+       width = 10,
+       height = 8,
+       units = c("in"))
+#```
+
+# Comparisons of Taxa
+#```{r}
+#Species Only Found by NPS Compared to Post Occupancy eDNA Data
+setdiff(nps_all_unique,get_taxa_unique(physeq_obj.occ,"Species"))
+#```
+
+#```{r}
+#Species Only Found by NPS Compared to Pre Occupancy eDNA Data
+setdiff(nps_all_unique,get_taxa_unique(physeq_obj.pre,"Species"))
+#```
+#```{r}
+#Overlap of Species Found by NPS and Post Occupancy eDNA Data
+intersect(nps_all_unique,get_taxa_unique(physeq_obj.occ,"Species"))
+#```
+
+#```{r}
+#Overlap of Species Found by NPS and Pre Occupancy eDNA Data
+intersect(nps_all_unique,get_taxa_unique(physeq_obj.pre,"Species"))
+#```
+
+#```{r}
+common_species %>% as.data.frame() %>% 
+  separate(., ., into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep=";") %>% dplyr::select(Species) -> common_species_eDNA
+
+mpa_species_df %>% as.data.frame() %>% 
+  separate(., Species, into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep=";") %>% dplyr::select(Species) -> eDNA_mpa_species_all
+
+mpa_species_unique %>% as.data.frame() %>% 
+  separate(., ., into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep=";") %>% dplyr::select(Species) -> eDNA_mpa_species_unique
+
+outside_species_df %>% as.data.frame() %>% 
+  separate(., Species, into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep=";") %>% dplyr::select(Species) -> eDNA_outside_species_df
+
+edge_species_df %>% as.data.frame() %>% 
+  separate(., Species, into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep=";") %>% dplyr::select(Species) -> eDNA_edge_species_df
+
+#```
+
+
+#```{r}
+#Common_species
+intersect(common_species_eDNA$Species,common_species_nps)
+#```
+
+#```{r}
+#Common Species NPS that were not common using eDNA methods
+setdiff(common_species_nps,common_species_eDNA$Species)
+#```
+#```{r}
+get_taxa_unique(physeq_obj.occ,"Species") -> eDNA_step2_species
+
+#Species Only Observed by NPS
+setdiff(nps_all_unique, eDNA_step2_species)
+#```
+
+#```{r}
+#Species Only Observed by eDNA
+setdiff(eDNA_step2_species, nps_all_unique)
+#```
+#```{r}
+ca_fish_list <- read.table("/Users/zackgold/Documents/UCLA_phd/Projects/California/reference_db/MS/data/fish_species_lists/miller_allen_combo_032620.csv", header = 1, sep = ",", stringsAsFactors = F)
+
+ca_fish_list$Miller_Lea_Combo_03262020 %>% unique() -> miller_list
+
+intersect(setdiff(eDNA_step2_species, nps_all_unique),miller_list) -> eDNA_add_ca_species
+#CA Species identified by eDNA but not the NPS
+eDNA_add_ca_species
+#```
+
+#```{r}
+nps2005_fish_list <- read.table("/Users/zackgold/Documents/UCLA_phd/Projects/California/General_Channel_Islands/MPA_test_data/input/2020320_analysis/analysis_20200330/nps_all_species.txt", header = 1, sep = "\t", stringsAsFactors = F)
+
+setdiff(setdiff(eDNA_step2_species, nps_all_unique),nps2005_fish_list$NPS_species)
+
+#Species Previously Observed by NPS
+intersect(setdiff(eDNA_step2_species, nps_all_unique),nps2005_fish_list$NPS_species)
+#```
+
+#```{r}
+eDNA_step2_species
+get_taxa_unique(physeq_obj.pre,"Species") -> eDNA_step1_species
+setdiff(eDNA_step1_species,eDNA_step2_species) %>%  sort()
+#```
+
+
+#Functional Traits
+
+#```{r}
+functional_traits <- read.table(here("data","20201110_functional_traits_all_species_only.csv"), header = 1, sep = ",", stringsAsFactors = F)
+
+functional_traits %>%  as.tibble() %>% 
+  filter(., Species !="") -> functional_traits_species_only
+#```
+
+#```{r}
+functional_traits_species_only %>% 
+  group_by(Species_found.post) %>% tally()
+#```
+
+#```{r}
+functional_traits_species_only %>% 
+  filter(Species_found.post =="Common_species") %>%
+  group_by(Habitat) %>% tally()
+#```
+
+#```{r}
+functional_traits_species_only %>% 
+  filter(Species_found.post !="Common_species") %>%
+  group_by(Habitat) %>%
+  tally()
+5/13
+
+functional_traits_species_only %>% 
+  filter(Species_found.post !="Common_species") %>% 
+  filter(Habitat !="rockyreef") %>% 
+  dplyr::select(Species)
+#```
+
+#```{r}
+functional_traits_species_only %>% 
+  filter(MPA.post ==0) %>%
+  dplyr::select(Species) %>%  kable()
+
+#```
