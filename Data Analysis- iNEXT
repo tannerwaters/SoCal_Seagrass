@@ -1,0 +1,114 @@
+## Species Accumulation Curves  
+
+
+#```{r}
+#Convert to iNEXT format from Observed Species (incidence frequencies)
+physeq_obj.noncontam_no_lab.binary <- transform_sample_counts(physeq_obj.occ_reads, function(abund) 1*(abund>0))
+#Subset Samples
+PP.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Big Geiger Cove") #mpa
+ppsummer.bin <- subset_samples(PP.bin, Season =="Summer")
+PedRF.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Cherry Cove") #outside
+LSC.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Two Harbors") #edge
+AM.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Amarillo")
+IN.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Inner DeAnza Peninsula")
+Out.bin <- subset_samples(physeq_obj.noncontam_no_lab.binary, Site=="Outer DeAnza Peninsula")
+
+#Convert to Vegan Dataframe
+#veganComm2.bin <- vegan_otu(physeq_obj.noncontam_no_lab.binary)
+veganCommpp.bin <- vegan_otu(PP.bin)
+veganCommppsummer.bin <- vegan_otu(ppsummer.bin)
+veganComm2pedrf.bin <- vegan_otu(PedRF.bin)
+veganCommlsc.bin <- vegan_otu(LSC.bin)
+veganCommAM.bin <- vegan_otu(AM.bin)
+veganCommIN.bin <- vegan_otu(IN.bin)
+veganCommOut.bin <- vegan_otu(Out.bin)
+
+#Create List for iNEXT Species Incidence Frequencies
+mpa_inc <-list ("Big Geiger Cove"=t(veganCommpp.bin),"Cherry Cove"=t(veganComm2pedrf.bin) , "Two Harbors" = t(veganCommlsc.bin), "Amarillo" =t(veganCommAM.bin), "Inner DeAnza Peninsula" = t(veganCommIN.bin), "Outer DeAnza Peninsula" = t(veganCommOut.bin))
+mpa_inc_sub <- list ("Big Geiger Cove"=t(veganCommpp.bin), "Two Harbors" = t(veganCommlsc.bin), "Amarillo" =t(veganCommAM.bin) )
+mpa_summer <-list ("Big Geiger Cove Summer" = t(veganCommppsummer.bin))
+
+species_incidence <-lapply(mpa_inc, as.incfreq)
+
+#Convert to iNEXT format
+t <- seq(1, 50, by=1)
+
+out.inc <- iNEXT(species_incidence, q=0, datatype="incidence_freq", size=t)
+out.inc$iNextEst
+out.inc$DataInfo
+
+
+# Sample‐size‐based R/E curves
+
+#Sample‐size‐based R/E curves
+#ggiNEXT(out.inc, type=1, color.var="site") + 
+ #  theme_bw(base_size = 18) + scale_fill_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) +  scale_color_manual(values=c(col_mpa[2],col_mpa[1],col_mpa[3])) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) + ggtitle("All Species Rarefaction Curve") +scale_x_continuous()+scale_y_continuous(breaks=seq(0,80,5)) + expand_limits(x = 0, y = 0)+ xlab("Samples") +ylab("Species")
+samplecurve <- ggiNEXT(out.inc, type= 1) +
+  theme_bw(base_size = 10) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  scale_x_continuous()+scale_y_continuous() + expand_limits(x = 0, y = 0)+ xlab("Samples") +ylab("Species") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+samplecurve
+
+ggsave(filename = here("Plos_Seagrass","inext.eps"),
+       plot = samplecurve,
+       device = cairo_ps,
+       dpi = 300,
+       width = 7.5,
+       height = 4.5,
+       units = c("in"))
+
+#```
+### Segmented
+#```{r}
+#out.inc$iNextEst$`Cherry Cove`%>% as_tibble() %>% mutate(., x=t,y=qD)-> mpa_tib
+site_inext <- subset(out.inc$iNextEst$coverage_based,out.inc$iNextEst$size_based$Assemblage == "Two Harbors")
+site_inext %>% as_tibble() %>% mutate(., x=t,y=qD)-> mpa_tib
+lm(y~x, mpa_tib) -> lin.mod.mpa
+summary(lin.mod.mpa)
+segmented.mod.mpa <- segmented(lin.mod.mpa, seg.Z = ~x, npsi=1)
+summary(segmented.mod.mpa)
+segmented.mod.mpa$psi[5]
+site_inext
+
+mpa_tib$qD
+p <- ggplot(mpa_tib, aes(x = x, y = y)) +  geom_point() + geom_vline(xintercept = 19.9)  + ylim(0,70)
+p
+
+
+ 
+p <- ggplot(mpa_tib, aes(x = x, y = y)) + geom_line() + ylim(0,100)
+p
+
+slope(segmented.mod.mpa)
+my.fitted <-fitted(segmented.mod.mpa)
+my.model <-data.frame(x = mpa_tib$x , y = my.fitted)
+p+ geom_line(data=my.model, aes(x = x, y = y), color='tomato')
+
+
+out.inc$iNextEst$`Big Geiger` %>% as.tibble() %>% mutate(., x=t,y=qD)-> edge_tib
+lm(y~x, edge_tib) -> lin.mod.edge
+
+p <- ggplot(edge_tib, aes(x = x, y = y)) + geom_line()
+p
+
+segmented.mod.edge <- segmented(lin.mod.edge, seg.Z = ~x)
+summary(segmented.mod.edge)
+segmented.mod.edge$psi
+slope(segmented.mod.edge)
+my.fitted <-fitted(segmented.mod.edge)
+my.model <-data.frame(x = edge_tib$x , y = my.fitted)
+p+ geom_line(data=my.model, aes(x = x, y = y), color='tomato')
+
+segmented.mod.edge <- segmented(lin.mod.edge, seg.Z = ~x)
+
+out.inc$iNextEst$`Two Harbors` %>% as.tibble() %>% mutate(., x=t,y=qD)-> out_tib
+lm(y~x, out_tib) -> lin.mod.out
+
+segmented.mod.out <- segmented(lin.mod.out, seg.Z = ~x)
+
+
+mean(c(segmented.mod.out$psi[2],segmented.mod.mpa$psi[2],segmented.mod.edge$psi[2]))
+c(segmented.mod.out$psi[2],segmented.mod.mpa$psi[2],segmented.mod.edge$psi[2])
+
+#```
