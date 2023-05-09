@@ -1,0 +1,223 @@
+## ANOVA Between Sites
+
+#{r, ANOVA Observed Taxa Between Sites}
+# Anova between sites
+
+alpha.diversity <- estimate_richness(physeq_obj.occ_seagrasssite_reads, measures = c("Observed"))
+data <- cbind(sample_data(physeq_obj.occ_reads), alpha.diversity)
+
+data.sub.amarillo <- subset(data,data$Site == "Amarilllo")
+data.sub.BG <- subset(data,data$Site == "Big Geiger")
+data.sub.BG.summer <- subset(data.sub.BG, data.sub.BG$Season == "Summer")
+
+model=lm(data$Observed ~ data$Site) 
+model=lm(data$Observed ~ data$Season) 
+ANOVA=aov(model)
+summary(ANOVA)
+
+
+
+
+#{r TUKEY Observed Taxa Between Sites}
+# Tukey test to study each pair of treatment :
+data$Site <- as.factor(data$Site) #ensure that Sites are factors  #site
+data$Season <- as.factor(data$Season) #ensure that Sites are factors  #site
+TUKEY <- TukeyHSD(x=ANOVA, 'data$Site', conf.level=0.95) 
+TUKEY <- TukeyHSD(x=ANOVA, 'data$Season', conf.level=0.95) 
+TUKEY
+
+
+
+
+#{r Observed Taxa Box Plot}
+#Function for determining signficant Groups from Tukey
+generate_label_df <- function(TUKEY, variable){
+  
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- TUKEY[[variable]][,4]
+  Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+  
+  #I need to put the labels in the same order as in the boxplot :
+  Tukey.labels$treatment=rownames(Tukey.labels)
+  Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+  return(Tukey.labels)
+}
+
+#Determine Groups of Samples
+labels<-generate_label_df(TUKEY , "data$Site") #generate labels of groups using function 
+names(labels)<-c('Letters','Site') #rename columns for merging
+
+labels<-generate_label_df(TUKEY , "data$Season") #generate labels of groups using function 
+names(labels)<-c('Letters','Season') #rename columns for merging
+
+#Obtain letter position for y axis using means
+yvalue<-aggregate(Observed~Site, data=data, mean) 
+yvalue<-aggregate(Observed~Season, data=data, mean) 
+
+final<-merge(labels,yvalue) #merge dataframes
+
+#newSTorder = c("MPA", "Edge", "Outside") 
+
+# Plot Boxplot of Observed Species w/ Signficant Groups labeled
+t <- plot_richness(physeq_obj.occ_reads, x = ("Site"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Site", alpha=0.2), width=0.75, trim=FALSE) + geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  geom_text(data = final, aes(x = Site, y = Observed, label = Letters),vjust=-17,hjust=.5) + 
+  ylab("Observed Species") + ylim(0,45) + theme(axis.text=element_text(size=7),
+              axis.title=element_text(size=10,face="bold")) + 
+  theme(legend.title = element_blank()) +theme(legend.position = "none") +
+  theme(strip.background = element_blank(), strip.text.x = element_blank())
+
+t
+
+ggsave(filename = here("Plos_Seagrass","alpha_site.eps"),
+       plot = t,
+       device = cairo_ps,
+       dpi = 300,
+       width = 7.5,
+       height = 4.5,
+       units = c("in"))
+                                                                                                                                                            
+
+t <- plot_richness(physeq_obj.occ_seagrasssite_reads, x = ("Season"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Season", alpha=0.2), width=0.75, trim=FALSE)+ scale_fill_manual(values= col.great) + geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  scale_x_discrete(limits=c("Winter", "Spring", "Summer", "Fall"), labels=c("Winter", "Spring", "Summer", "Fall") ) +
+  geom_text(data = final, aes(x = Season, y = Observed, label = Letters),vjust=-15,hjust=.5, label.size = 6 ) +
+  ylab("Observed Species") + ylim(0,45) + theme(axis.text=element_text(size=10), axis.title=element_text(size=10,face="bold")) +
+  theme(legend.title = element_blank()) +theme(legend.position = "none") +theme(strip.background = element_blank(),strip.text.x = element_blank())
+
+
+t
+
+
+# ggsave(filename = here("analysis","Figures","observed_species.eps"),
+#        plot = plot(t),
+#        device = cairo_ps,
+#        dpi = 300,
+#        width = 12,
+#        height = 6,
+#        units = c("in"))
+
+
+### Levene Test
+
+
+leveneTest(Observed ~ Site, data = data)
+
+
+###--------------###
+## ANOVA Between Sites
+
+#{r, ANOVA Observed Taxa Between Sites}
+# Anova between sites
+
+alpha.diversity <- estimate_richness(physeq_obj.occ_reads, measures = c("Observed"))
+data <- cbind(sample_data(physeq_obj.occ_reads), alpha.diversity)
+
+data.catalina<- subset(data,data$Site == "Cherry Cove" | data$Site == "Big Geiger"  | data$Site == "Two Harbors" )
+data.sub.BG <- subset(data,data$Site == "Big Geiger")
+data.sub.BG.summer <- subset(data.sub.BG, data.sub.BG$Season == "Summer")
+
+model=lm(data.catalina$Observed ~ data.catalina$Site) 
+model=lm(data$Observed ~ data$Site) 
+model=lm(data$Observed ~ data$Season) 
+ANOVA=aov(model)
+summary(ANOVA)
+
+
+
+
+#{r TUKEY Observed Taxa Between Sites}
+# Tukey test to study each pair of treatment :
+data.catalina$Site <- as.factor(data.catalina$Site) #ensure that Sites are factors  #site
+data$Site <- as.factor(data$Site) #ensure that Sites are factors  #site
+data$Season <- as.factor(data$Season) #ensure that Sites are factors  #site
+TUKEY <- TukeyHSD(x=ANOVA, 'data.catalina$Site', conf.level=0.95) 
+TUKEY <- TukeyHSD(x=ANOVA, 'data$Site', conf.level=0.95) 
+TUKEY <- TukeyHSD(x=ANOVA, 'data$Season', conf.level=0.95) 
+TUKEY
+
+
+
+
+#{r Observed Taxa Box Plot}
+#Function for determining signficant Groups from Tukey
+generate_label_df <- function(TUKEY, variable){
+  
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- TUKEY[[variable]][,4]
+  Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+  
+  #I need to put the labels in the same order as in the boxplot :
+  Tukey.labels$treatment=rownames(Tukey.labels)
+  Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+  return(Tukey.labels)
+}
+
+#Determine Groups of Samples
+labels<-generate_label_df(TUKEY , "data.catalina$Site") #generate labels of groups using function 
+names(labels)<-c('Letters','Site') #rename columns for merging
+
+labels<-generate_label_df(TUKEY , "data$Site") #generate labels of groups using function 
+names(labels)<-c('Letters','Site') #rename columns for merging
+
+labels<-generate_label_df(TUKEY , "data$Season") #generate labels of groups using function 
+names(labels)<-c('Letters','Season') #rename columns for merging
+
+#Obtain letter position for y axis using means
+yvalue<-aggregate(Observed~Site, data=data.catalina, mean) 
+yvalue<-aggregate(Observed~Site, data=data, mean) 
+yvalue<-aggregate(Observed~Season, data=data, mean) 
+
+final<-merge(labels,yvalue) #merge dataframes
+
+#newSTorder = c("MPA", "Edge", "Outside") 
+
+# Plot Boxplot of Observed Species w/ Signficant Groups labeled
+t <- plot_richness(physeq_obj.occ_reads, x = ("Site"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Site", alpha=0.2), width=0.75, trim=FALSE) + scale_fill_manual(values= col.great) + geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  geom_text(data = final, aes(x = Site, y = Observed, label = Letters),vjust=-17,hjust=.5, label.size = 6 ) + ylab("Observed Species") + ylim(0,45) + theme(axis.text=element_text(size=5),
+                                                                                                                                                            axis.title=element_text(size=8,face="bold")) + theme(legend.title = element_blank()) +theme(legend.position = "none") +theme(
+                                                                                                                                                              strip.background = element_blank(), strip.text.x = element_blank() +geom_text_repel())
+
+t
+
+t <- plot_richness(physeq_obj.occ_reads, x = ("Site"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Site", alpha=0.2), width=0.75, trim=FALSE) + geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  geom_text(data = final, aes(x = Site, y = Observed, label = Letters),vjust=-17,hjust=.5) + ylab("Observed Species") + ylim(0,45) + theme(axis.text=element_text(size=8),
+  axis.title=element_text(size=10,face="bold")) + theme(legend.title = element_blank()) +theme(legend.position = "none") +theme(strip.background = element_blank(), strip.text.x = element_blank() +geom_text_repel()) 
+
+t
+
+t <- plot_richness(physeq_obj.occ_seagrasssite_reads, x = ("Season"), measures = c("Observed")) +
+  geom_violin(aes_string(fill = "Season", alpha=0.2), width=0.75, trim=FALSE) + scale_fill_manual(values= col.great) + geom_boxplot(width=0.1)+
+  theme_bw() +theme(legend.position="none") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) +
+  scale_x_discrete(limits=c("Winter", "Spring", "Summer", "Fall"), labels=c("Winter", "Spring", "Summer", "Fall")) +
+  geom_text(data = final, aes(x = Season, y = Observed, label = Letters),vjust=-15,hjust=.5, label.size = 6 ) + ylab("Observed Species") + ylim(0,45) + theme(axis.text=element_text(size=5),
+                                                                                                                                                              axis.title=element_text(size=10,face="bold")) + theme(legend.title = element_blank()) +theme(legend.position = "none") +theme(
+                                                                                                                                                                strip.background = element_blank(),
+                                                                                                                                                                strip.text.x = element_blank()
+                                                                                                                                                              )
+#t$data$Site <- as.character(t$data$Site)
+#t$data$Site <- factor(t$data$Site, levels=newSTorder)
+#t$data$Season <- as.character(t$data$Season
+
+t
+
+# ggsave(filename = here("analysis","Figures","observed_species.eps"),
+#        plot = plot(t),
+#        device = cairo_ps,
+#        dpi = 300,
+#        width = 12,
+#        height = 6,
+#        units = c("in"))
+
+
+### Levene Test
+
+
+leveneTest(Observed ~ Site, data = data)
+
